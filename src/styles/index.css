@@ -133,6 +133,18 @@ button {
   z-index: -1;
 }
 
+/* Safari/iPadOS requires the PiP source video to have real non-trivial dimensions and positive z-index */
+.pip-source-video {
+  position: fixed;
+  bottom: 0;
+  right: 0;
+  width: 16px;
+  height: 9px;
+  opacity: 0.01;
+  pointer-events: none;
+  z-index: 1;
+}
+
 /* ==========================================================================
    Stage 1 Warm Peripheral Screen-Edge Glow
    ========================================================================== */

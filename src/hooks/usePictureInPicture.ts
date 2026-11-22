@@ -24,7 +24,10 @@ export interface PipCanvasState {
   faceState: 'detected' | 'cached' | 'away';
 }
 
-export function usePictureInPicture(canvasState: PipCanvasState) {
+export function usePictureInPicture(
+  canvasState: PipCanvasState,
+  cameraVideoRef?: React.RefObject<HTMLVideoElement | null>
+) {
   const [pipKind, setPipKind] = useState<PiPKind>('none');
   const [pipWindow, setPipWindow] = useState<Window | null>(null);
   const [pipContainer, setPipContainer] = useState<HTMLElement | null>(null);
@@ -33,6 +36,7 @@ export function usePictureInPicture(canvasState: PipCanvasState) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const pipVideoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const activePipVideoElRef = useRef<WebKitVideoElement | null>(null);
   const stateRef = useRef(canvasState);
   stateRef.current = canvasState;
 
@@ -57,15 +61,12 @@ export function usePictureInPicture(canvasState: PipCanvasState) {
     const isAlert = s.stage2AlertOpen;
     const isStage1 = s.stage1Glow || s.handInZone;
 
-    // Pulse phase for luminous glowing light animation
     const t = performance.now() / 1000;
     const pulse = 0.5 + 0.5 * Math.sin(t * (isAlert ? 3.2 : 2.0));
 
-    // Base warm paper / dark editorial background
     ctx.fillStyle = isDark ? '#1A1917' : '#FAF9F5';
     ctx.fillRect(0, 0, w, h);
 
-    // Prominent glowing light halo on Stage 2 or Stage 1
     if (isAlert || isStage1) {
       const grad = ctx.createRadialGradient(w / 2, h / 2, 16, w / 2, h / 2, w * 0.65);
       const alpha = isAlert ? 0.34 + 0.22 * pulse : 0.16 + 0.1 * pulse;
@@ -74,7 +75,6 @@ export function usePictureInPicture(canvasState: PipCanvasState) {
       ctx.fillStyle = grad;
       ctx.fillRect(0, 0, w, h);
 
-      // Glowing border rim
       ctx.save();
       ctx.strokeStyle = isAlert
         ? `rgba(236, 156, 78, ${(0.72 + 0.28 * pulse).toFixed(3)})`
@@ -94,16 +94,19 @@ export function usePictureInPicture(canvasState: PipCanvasState) {
     const accent = isDark ? '#D97757' : '#C96442';
     const sage = isDark ? '#7DA388' : '#587B64';
 
-    // Top-left glowing status orb + brand
     const orbX = 34;
     const orbY = 36;
-    const orbColor = isAlert || isStage1 ? '#E8964A' : s.status === 'running' ? sage : inkMuted;
+    const orbColor =
+      isAlert || isStage1 ? '#E8964A' : s.status === 'running' ? sage : inkMuted;
 
     if (isAlert || isStage1 || s.status === 'running') {
       ctx.save();
       ctx.beginPath();
       ctx.arc(orbX, orbY, isAlert ? 16 + 4 * pulse : 11, 0, Math.PI * 2);
-      ctx.fillStyle = isAlert || isStage1 ? 'rgba(232, 150, 74, 0.32)' : 'rgba(88, 123, 100, 0.2)';
+      ctx.fillStyle =
+        isAlert || isStage1
+          ? 'rgba(232, 150, 74, 0.32)'
+          : 'rgba(88, 123, 100, 0.2)';
       ctx.fill();
       ctx.restore();
     }
@@ -117,18 +120,12 @@ export function usePictureInPicture(canvasState: PipCanvasState) {
     ctx.fillStyle = ink;
     ctx.fillText('Still', 52, 43);
 
-    // Right badge
     ctx.font = '500 13px -apple-system, BlinkMacSystemFont, sans-serif';
     ctx.fillStyle = inkMuted;
     ctx.textAlign = 'right';
-    ctx.fillText(
-      s.status === 'running' ? 'Local · 4 FPS' : 'Paused',
-      w - 28,
-      41
-    );
+    ctx.fillText(s.status === 'running' ? 'Local · 4 FPS' : 'Paused', w - 28, 41);
     ctx.textAlign = 'left';
 
-    // Main message
     const title = isAlert
       ? 'Gentle pause — hands down.'
       : isStage1
@@ -149,13 +146,12 @@ export function usePictureInPicture(canvasState: PipCanvasState) {
         ? 'Lower hand gently to auto-catch'
         : s.status === 'running'
           ? 'Watching locally in Picture-in-Picture'
-          : 'Open Still to begin watching';
+          : 'Tap Begin session in Still to watch';
 
     ctx.font = '400 15px -apple-system, BlinkMacSystemFont, sans-serif';
     ctx.fillStyle = inkMuted;
     ctx.fillText(sub, 28, 154);
 
-    // Bottom hairline & calm summary
     ctx.strokeStyle = isDark ? 'rgba(242,239,232,0.12)' : 'rgba(31,30,28,0.1)';
     ctx.lineWidth = 1;
     ctx.beginPath();
@@ -174,7 +170,69 @@ export function usePictureInPicture(canvasState: PipCanvasState) {
     ctx.fillText(String(s.urgesRedirected), 210, h - 18);
   }, []);
 
-  // Keep Canvas Video PiP redrawing smoothly while active
+  /**
+   * Pre-warm the Canvas -> MediaStream -> <video> pipeline BEFORE the user taps "Float PiP"
+   * so iPadOS / macOS Safari already has readyState >= 2 and can enter PiP SYNCHRONOUSLY
+   * inside the tap gesture without losing Safari's user-activation token.
+   */
+  const primeCanvasVideo = useCallback(() => {
+    const canvas = canvasRef.current;
+    const video = pipVideoRef.current as WebKitVideoElement | null;
+    if (!canvas || !video) return;
+
+    drawCanvasFrame();
+
+    if (!streamRef.current && typeof canvas.captureStream === 'function') {
+      try {
+        streamRef.current = canvas.captureStream(10);
+      } catch {
+        try {
+          streamRef.current = canvas.captureStream();
+        } catch {
+          return;
+        }
+      }
+    }
+
+    if (streamRef.current && video.srcObject !== streamRef.current) {
+      video.srcObject = streamRef.current;
+    }
+
+    video.muted = true;
+    video.playsInline = true;
+    video.setAttribute('webkit-playsinline', 'true');
+    video.setAttribute('playsinline', 'true');
+
+    if (video.paused) {
+      video.play().catch(() => {});
+    }
+  }, [drawCanvasFrame]);
+
+  // Pre-warm on mount + first pointer gesture (handles Safari autoplay policy cleanly)
+  useEffect(() => {
+    if ('documentPictureInPicture' in window) return;
+
+    primeCanvasVideo();
+
+    const onFirstTouch = () => {
+      primeCanvasVideo();
+    };
+    window.addEventListener('pointerdown', onFirstTouch, { passive: true, once: true });
+
+    // Light keep-alive frame every 1s so captureStream stays alive & readyState >= 2
+    const keepAlive = window.setInterval(() => {
+      if (streamRef.current) {
+        drawCanvasFrame();
+      }
+    }, 1000);
+
+    return () => {
+      window.removeEventListener('pointerdown', onFirstTouch);
+      window.clearInterval(keepAlive);
+    };
+  }, [drawCanvasFrame, primeCanvasVideo]);
+
+  // Smooth 5 FPS canvas refresh while Video PiP is actively floating
   useEffect(() => {
     if (pipKind !== 'video') return;
     drawCanvasFrame();
@@ -188,6 +246,69 @@ export function usePictureInPicture(canvasState: PipCanvasState) {
       pipWindow.document.documentElement.setAttribute('data-theme', canvasState.theme);
     }
   }, [pipWindow, canvasState.theme]);
+
+  const attachLeaveListeners = useCallback((video: WebKitVideoElement) => {
+    activePipVideoElRef.current = video;
+
+    const onLeave = () => {
+      setPipKind('none');
+      activePipVideoElRef.current = null;
+      video.removeEventListener('leavepictureinpicture', onLeave);
+    };
+    video.addEventListener('leavepictureinpicture', onLeave);
+
+    const onWebKitChange = () => {
+      if (video.webkitPresentationMode !== 'picture-in-picture') {
+        setPipKind('none');
+        activePipVideoElRef.current = null;
+        video.removeEventListener('webkitpresentationmodechanged', onWebKitChange);
+      }
+    };
+    video.addEventListener('webkitpresentationmodechanged', onWebKitChange);
+  }, []);
+
+  /**
+   * Attempts to enter native video PiP SYNCHRONOUSLY on a ready video element.
+   * Prefers Safari WebKit presentation mode on iPadOS/macOS Safari, then W3C requestPictureInPicture.
+   */
+  const tryEnterVideoPiPSync = useCallback(
+    async (video: WebKitVideoElement): Promise<{ ok: boolean; error?: string }> => {
+      // 1. Safari / iPadOS WebKit API (must run synchronously inside tap gesture)
+      if (
+        typeof video.webkitSupportsPresentationMode === 'function' &&
+        typeof video.webkitSetPresentationMode === 'function' &&
+        video.webkitSupportsPresentationMode('picture-in-picture')
+      ) {
+        try {
+          attachLeaveListeners(video);
+          video.webkitSetPresentationMode('picture-in-picture');
+          return { ok: true };
+        } catch (err) {
+          return {
+            ok: false,
+            error: err instanceof Error ? err.message : String(err),
+          };
+        }
+      }
+
+      // 2. Standard W3C Picture-in-Picture API
+      if (typeof video.requestPictureInPicture === 'function') {
+        try {
+          attachLeaveListeners(video);
+          await video.requestPictureInPicture();
+          return { ok: true };
+        } catch (err) {
+          return {
+            ok: false,
+            error: err instanceof Error ? err.message : String(err),
+          };
+        }
+      }
+
+      return { ok: false, error: 'PiP API not exposed on this video element' };
+    },
+    [attachLeaveListeners]
+  );
 
   const closePiP = useCallback(async () => {
     setPipError(null);
@@ -204,25 +325,23 @@ export function usePictureInPicture(canvasState: PipCanvasState) {
         // ignore
       }
     }
-    const vid = pipVideoRef.current as WebKitVideoElement | null;
-    if (vid?.webkitPresentationMode === 'picture-in-picture') {
+    const activeVid =
+      activePipVideoElRef.current ?? (pipVideoRef.current as WebKitVideoElement | null);
+    if (activeVid?.webkitPresentationMode === 'picture-in-picture') {
       try {
-        vid.webkitSetPresentationMode?.('inline');
+        activeVid.webkitSetPresentationMode?.('inline');
       } catch {
         // ignore
       }
     }
-    if (streamRef.current) {
-      for (const track of streamRef.current.getTracks()) track.stop();
-      streamRef.current = null;
-    }
+    activePipVideoElRef.current = null;
     setPipKind('none');
   }, [pipWindow]);
 
   const openPiP = useCallback(async () => {
     setPipError(null);
 
-    // 1. Prefer Document Picture-in-Picture (Chrome / Edge desktop) for full interactive mini-window
+    // 1. Desktop Chrome / Edge: Document Picture-in-Picture (interactive mini HTML window)
     const docPiP = (window as unknown as { documentPictureInPicture?: DocumentPiPApi })
       .documentPictureInPicture;
 
@@ -232,7 +351,6 @@ export function usePictureInPicture(canvasState: PipCanvasState) {
         win.document.documentElement.setAttribute('data-theme', stateRef.current.theme);
         win.document.title = 'Still · Floating';
 
-        // Copy stylesheets into PiP window so warm paper / dark editorial theme matches 100%
         for (const sheet of Array.from(document.styleSheets)) {
           try {
             if (sheet.href) {
@@ -248,7 +366,6 @@ export function usePictureInPicture(canvasState: PipCanvasState) {
               win.document.head.appendChild(style);
             }
           } catch {
-            // Cross-origin stylesheet (Google Fonts) -> copy <link> directly
             if (sheet.href) {
               const link = win.document.createElement('link');
               link.rel = 'stylesheet';
@@ -274,69 +391,59 @@ export function usePictureInPicture(canvasState: PipCanvasState) {
         setPipKind('document');
         return;
       } catch {
-        // Fall through to Canvas Video PiP if Document PiP was blocked or unavailable
+        // Fall through to Video PiP
       }
     }
 
-    // 2. Fallback: Canvas-streamed Video PiP (works on iPadOS Safari, macOS Safari, Firefox)
-    const canvas = canvasRef.current;
-    const video = pipVideoRef.current as WebKitVideoElement | null;
-    if (!canvas || !video) {
-      setPipError('Picture-in-Picture is not supported in this browser.');
+    // 2. Safari / iPadOS: Synchronous Video PiP on pre-warmed Canvas stream
+    const pipVideo = pipVideoRef.current as WebKitVideoElement | null;
+    if (pipVideo) {
+      // Ensure frame is freshly drawn & playback started WITHOUT awaiting before PiP call!
+      primeCanvasVideo();
+
+      if (pipVideo.readyState >= 1) {
+        const res = await tryEnterVideoPiPSync(pipVideo);
+        if (res.ok) {
+          setPipKind('video');
+          return;
+        }
+      }
+    }
+
+    // 3. Fallback for iPadOS builds that disallow canvas.captureStream PiP:
+    //    Enter PiP directly on the live front-camera <video> element if a session is running!
+    const camVideo = cameraVideoRef?.current as WebKitVideoElement | null;
+    if (camVideo && camVideo.readyState >= 1 && camVideo.srcObject) {
+      const camRes = await tryEnterVideoPiPSync(camVideo);
+      if (camRes.ok) {
+        setPipKind('video');
+        return;
+      }
+    }
+
+    // 4. If canvas video was cold (readyState === 0 on first tap), wait briefly for metadata
+    //    and prompt a second tap so Safari gets a fresh synchronous gesture with readyState >= 2.
+    if (pipVideo && pipVideo.readyState === 0) {
+      primeCanvasVideo();
+      setPipError(
+        'Picture-in-Picture is now warmed up — tap "Float PiP" one more time to pop it out.'
+      );
       return;
     }
 
-    try {
-      drawCanvasFrame();
-      if (!streamRef.current && typeof canvas.captureStream === 'function') {
-        streamRef.current = canvas.captureStream(8);
-      }
-      if (!streamRef.current) {
-        setPipError('This browser does not support floating Picture-in-Picture.');
-        return;
-      }
-
-      video.srcObject = streamRef.current;
-      video.muted = true;
-      video.playsInline = true;
-      await video.play();
-
-      const onLeave = () => {
-        setPipKind('none');
-        video.removeEventListener('leavepictureinpicture', onLeave);
-      };
-      video.addEventListener('leavepictureinpicture', onLeave);
-
-      if (typeof video.requestPictureInPicture === 'function') {
-        await video.requestPictureInPicture();
-        setPipKind('video');
-        return;
-      }
-
-      if (
-        typeof video.webkitSupportsPresentationMode === 'function' &&
-        video.webkitSupportsPresentationMode('picture-in-picture') &&
-        typeof video.webkitSetPresentationMode === 'function'
-      ) {
-        const onWebKitChange = () => {
-          if (video.webkitPresentationMode !== 'picture-in-picture') {
-            setPipKind('none');
-            video.removeEventListener('webkitpresentationmodechanged', onWebKitChange);
-          }
-        };
-        video.addEventListener('webkitpresentationmodechanged', onWebKitChange);
-        video.webkitSetPresentationMode('picture-in-picture');
-        setPipKind('video');
-        return;
-      }
-
-      setPipError('Picture-in-Picture is unavailable in this browser.');
-    } catch {
+    // 5. Final clear diagnostic message tailored to iPadOS Chrome vs Safari
+    const ua = navigator.userAgent;
+    const isCriOS = /CriOS/i.test(ua);
+    if (isCriOS) {
       setPipError(
-        'Could not open Picture-in-Picture. On iPadOS, Split View or Slide Over also keeps Still visible.'
+        'Chrome on iPadOS restricts programmatic web PiP. Open Still in Safari on iPad (or use iPad Split View / Slide Over) to float Still beside other apps.'
+      );
+    } else {
+      setPipError(
+        'This browser blocked floating PiP. On iPadOS Safari, make sure Settings → Multitasking & Gestures → Picture in Picture is on, or start a session first and try again (Split View / Slide Over also keeps Still visible).'
       );
     }
-  }, [drawCanvasFrame]);
+  }, [cameraVideoRef, primeCanvasVideo, tryEnterVideoPiPSync]);
 
   const togglePiP = useCallback(async () => {
     if (pipKind !== 'none') {
@@ -346,7 +453,6 @@ export function usePictureInPicture(canvasState: PipCanvasState) {
     }
   }, [closePiP, openPiP, pipKind]);
 
-  // Cleanup on unmount
   useEffect(() => {
     return () => {
       if (streamRef.current) {
@@ -363,6 +469,7 @@ export function usePictureInPicture(canvasState: PipCanvasState) {
     isSupported,
     canvasRef,
     pipVideoRef,
+    primeCanvasVideo,
     togglePiP,
     closePiP,
   };

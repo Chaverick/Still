@@ -147,16 +147,19 @@ export function App() {
   const todayKey = getLocalDateKey();
   const today = days[todayKey] ?? getEmptyDay(todayKey);
 
-  const pip = usePictureInPicture({
-    theme,
-    status: session.status,
-    calmSeconds: today.calmSeconds,
-    urgesRedirected: today.urgesRedirected,
-    handInZone: Boolean(session.frameGeometry?.handInZone),
-    stage1Glow: session.edgeGlowActive,
-    stage2AlertOpen: pauseSheetState.open,
-    faceState: session.diagnostics.faceState,
-  });
+  const pip = usePictureInPicture(
+    {
+      theme,
+      status: session.status,
+      calmSeconds: today.calmSeconds,
+      urgesRedirected: today.urgesRedirected,
+      handInZone: Boolean(session.frameGeometry?.handInZone),
+      stage1Glow: session.edgeGlowActive,
+      stage2AlertOpen: pauseSheetState.open,
+      faceState: session.diagnostics.faceState,
+    },
+    session.videoRef
+  );
 
   useEffect(() => {
     setPipActive(pip.pipActive);
@@ -482,7 +485,7 @@ export function App() {
         aria-hidden="true"
       />
 
-      {/* Offscreen canvas + video elements powering Canvas Video PiP on iPadOS Safari / Safari / Firefox */}
+      {/* Offscreen canvas + minimally visible video element powering Canvas Video PiP on Safari/iPadOS */}
       <canvas
         ref={pip.canvasRef}
         width={480}
@@ -492,7 +495,8 @@ export function App() {
       />
       <video
         ref={pip.pipVideoRef}
-        className="safari-live-video"
+        className="pip-source-video"
+        autoPlay
         playsInline
         muted
         aria-hidden="true"
@@ -510,7 +514,10 @@ export function App() {
             stage2AlertOpen={pauseSheetState.open}
             faceState={session.diagnostics.faceState}
             pinnedResponses={settings.pinnedResponses}
-            onStart={() => void session.startSession()}
+            onStart={() => {
+              pip.primeCanvasVideo();
+              void session.startSession();
+            }}
             onStop={session.stopSession}
             onAutoCatch={handlePauseAutoCatch}
             onGraceRecovery={() => handlePauseGraceRecovery()}
@@ -594,7 +601,10 @@ export function App() {
             totalCalmSeconds={totalCalmSeconds}
             settings={settings}
             onUpdateSettings={updateSettings}
-            onStart={() => void session.startSession()}
+            onStart={() => {
+              pip.primeCanvasVideo();
+              void session.startSession();
+            }}
             onStop={session.stopSession}
             onTestStage1={session.triggerTestCue}
             onTestStage2={() => {
