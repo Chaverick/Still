@@ -2,6 +2,8 @@ export type ThemeMode = 'light' | 'dark';
 export type TabId = 'today' | 'progress' | 'what-works' | 'notes';
 export type PreviewMode = 'silhouette' | 'camera';
 export type DelegateMode = 'GPU' | 'CPU' | null;
+export type DetectionZoneId = 'left-brow' | 'right-brow' | 'lashes' | 'hairline';
+export type PiPKind = 'none' | 'document' | 'video';
 
 export interface StillSettings {
   stage1Enabled: boolean;
@@ -10,7 +12,9 @@ export interface StillSettings {
   stage2RepeatChime: boolean;
   stage1DwellSec: number; // default 1.2s
   stage2DwellSec: number; // default 2.6s
-  zoneScale: number; // multiplier on eye-width normalized halo, default 1.0 (maps to ~0.26 * eyeSpan)
+  zoneScale: number; // multiplier on eye-width normalized halo, default 1.0
+  activeZones: DetectionZoneId[];
+  pinchFilterEnabled: boolean; // optional thumb-index/middle pinch filter to reduce casual scratch false alarms
   previewMode: PreviewMode;
   pinnedResponses: string[];
   checkedAnchors: string[];
@@ -62,21 +66,27 @@ export interface Point2D {
   y: number;
 }
 
+export interface ZoneGeometry {
+  id: DetectionZoneId;
+  points: Point2D[];
+  closed: boolean;
+  radius: number; // aspect-corrected isotropic radius
+}
+
 export interface FrameGeometry {
   videoWidth: number;
   videoHeight: number;
   facePresent: boolean;
   usingOcclusionCache: boolean;
   faceOval: Point2D[];
-  leftBrow: Point2D[];
-  rightBrow: Point2D[];
   leftEye: Point2D[];
   rightEye: Point2D[];
+  activeZones: ZoneGeometry[];
   eyeSpan: number; // aspect-corrected isotropic span
-  haloRadius: number; // aspect-corrected isotropic radius
-  fingertips: Array<Point2D & { inZone: boolean; handIndex: number }>;
+  haloRadius: number; // primary brow isotropic radius
+  fingertips: Array<Point2D & { inZone: boolean; handIndex: number; pinching: boolean }>;
   handInZone: boolean;
-  closestRatio: number | null; // closest fingertip dist / haloRadius (< 1 means inside)
+  closestRatio: number | null; // closest fingertip dist / zoneRadius (< 1 means inside)
 }
 
 export type EngineStatus =

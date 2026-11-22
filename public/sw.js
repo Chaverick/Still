@@ -1,4 +1,4 @@
-const SHELL_CACHE = 'still-shell-v2';
+const SHELL_CACHE = 'still-shell-v3';
 const MODEL_CACHE = 'still-models-v1';
 
 const SHELL_ASSETS = [

@@ -1,5 +1,7 @@
 import { useEffect, useRef } from 'react';
+import { ZONE_OPTIONS } from '../lib/storage';
 import type {
+  DetectionZoneId,
   FrameGeometry,
   Point2D,
   PreviewMode,
@@ -80,7 +82,6 @@ export function CalibrationDrawer({
       ctx.save();
       ctx.translate(w, 0);
       ctx.scale(-1, 1);
-      // Cover-fit video into canvas
       const vAspect = video.videoWidth / video.videoHeight;
       const cAspect = w / h;
       let drawW = w;
@@ -96,7 +97,6 @@ export function CalibrationDrawer({
       }
       ctx.drawImage(video, dx, dy, drawW, drawH);
       ctx.restore();
-      // Subtle editorial warm scrim over camera feed
       ctx.fillStyle = 'rgba(26, 25, 23, 0.14)';
       ctx.fillRect(0, 0, w, h);
     } else {
@@ -105,7 +105,6 @@ export function CalibrationDrawer({
     }
 
     if (!sessionRunning || !frameGeometry) {
-      // Calm resting placeholder illustration
       ctx.save();
       ctx.strokeStyle = inkMuted;
       ctx.globalAlpha = 0.28;
@@ -114,7 +113,6 @@ export function CalibrationDrawer({
       ctx.ellipse(w / 2, h / 2, 58, 74, 0, 0, Math.PI * 2);
       ctx.stroke();
 
-      // Gentle brow arcs
       ctx.strokeStyle = accent;
       ctx.globalAlpha = 0.45;
       ctx.lineWidth = 2.5;
@@ -129,8 +127,6 @@ export function CalibrationDrawer({
       return;
     }
 
-    // Compute coordinate mapping matching cover-fit when in camera mode,
-    // or full frame when in silhouette mode
     const vAspect = frameGeometry.videoWidth / Math.max(1, frameGeometry.videoHeight);
     const cAspect = w / h;
     let mapW = w;
@@ -155,12 +151,10 @@ export function CalibrationDrawer({
 
     if (frameGeometry.facePresent) {
       const oval = mapPts(frameGeometry.faceOval);
-      const leftBrow = mapPts(frameGeometry.leftBrow);
-      const rightBrow = mapPts(frameGeometry.rightBrow);
       const leftEye = mapPts(frameGeometry.leftEye);
       const rightEye = mapPts(frameGeometry.rightEye);
 
-      // Face oval outline (subtle in silhouette, very light in camera)
+      // Face oval outline
       ctx.save();
       drawMirroredPoly(ctx, oval, w, h, true);
       ctx.strokeStyle = showCamera ? 'rgba(255,255,255,0.35)' : inkMuted;
@@ -183,28 +177,25 @@ export function CalibrationDrawer({
         ctx.restore();
       }
 
-      // Eyebrow halo zones (thick translucent warm stroke scaled by haloRadius)
-      const haloPx = frameGeometry.haloRadius * mapH;
-      const drawBrowHalo = (browPts: Point2D[]) => {
-        if (browPts.length < 2) return;
+      // Draw every active detection zone with its exact isotropic halo radius
+      for (const zone of frameGeometry.activeZones) {
+        const pts = mapPts(zone.points);
+        if (pts.length < 2) continue;
+        const haloPx = zone.radius * mapH;
         ctx.save();
-        drawMirroredPoly(ctx, browPts, w, h, true);
+        drawMirroredPoly(ctx, pts, w, h, zone.closed);
         ctx.lineJoin = 'round';
         ctx.lineCap = 'round';
-        ctx.lineWidth = Math.max(12, haloPx * 2);
+        ctx.lineWidth = Math.max(10, haloPx * 2);
         ctx.strokeStyle = frameGeometry.handInZone ? accent : sage;
-        ctx.globalAlpha = frameGeometry.handInZone ? 0.26 : 0.16;
+        ctx.globalAlpha = frameGeometry.handInZone ? 0.24 : 0.15;
         ctx.stroke();
 
-        // Crisp inner brow contour
         ctx.lineWidth = 2;
         ctx.globalAlpha = frameGeometry.handInZone ? 0.92 : 0.65;
         ctx.stroke();
         ctx.restore();
-      };
-
-      drawBrowHalo(leftBrow);
-      drawBrowHalo(rightBrow);
+      }
     }
 
     // Fingertip markers
@@ -237,6 +228,18 @@ export function CalibrationDrawer({
     onUpdateSettings({ previewMode });
   };
 
+  const toggleZone = (id: DetectionZoneId) => {
+    const exists = settings.activeZones.includes(id);
+    if (exists && settings.activeZones.length <= 1) {
+      // Keep at least one detection zone enabled
+      return;
+    }
+    const next = exists
+      ? settings.activeZones.filter((z) => z !== id)
+      : [...settings.activeZones, id];
+    onUpdateSettings({ activeZones: next });
+  };
+
   return (
     <section className="calibration-section" aria-label="Calibration and preview">
       <button
@@ -247,7 +250,7 @@ export function CalibrationDrawer({
         onClick={onToggleExpand}
       >
         <div className="calibration-toggle-left">
-          <span className="calibration-toggle-title">Calibration &amp; preview</span>
+          <span className="calibration-toggle-title">Calibration, zones &amp; preview</span>
           <span className="calibration-toggle-meta">
             {sessionRunning
               ? `${diagnostics.fps.toFixed(1)} FPS · Local${diagnostics.delegate ? ` · ${diagnostics.delegate}` : ''}${diagnostics.wakeLockActive ? ' · Wake Lock' : ''}`
@@ -299,8 +302,8 @@ export function CalibrationDrawer({
               className="preview-canvas"
               aria-label={
                 settings.previewMode === 'silhouette'
-                  ? 'Abstract eyebrow halo silhouette preview'
-                  : 'Mirrored camera preview with eyebrow halo overlay'
+                  ? 'Abstract detection zone silhouette preview'
+                  : 'Mirrored camera preview with detection zone overlay'
               }
             />
           </div>
@@ -308,14 +311,11 @@ export function CalibrationDrawer({
           {/* Live dwell bar */}
           <div className="dwell-meter-block">
             <div className="dwell-meter-labels">
-              <span>Eyebrow proximity dwell</span>
+              <span>Active zone proximity dwell</span>
               <span className="tabular">{dwellSec.toFixed(1)}s</span>
             </div>
             <div className="dwell-track">
-              <div
-                className="dwell-fill"
-                style={{ width: `${dwellPct}%` }}
-              />
+              <div className="dwell-fill" style={{ width: `${dwellPct}%` }} />
               <div
                 className="dwell-marker"
                 style={{ left: `${stage1MarkerPct}%` }}
@@ -326,6 +326,31 @@ export function CalibrationDrawer({
               <span>0s</span>
               <span>Stage 1 · {settings.stage1DwellSec.toFixed(1)}s</span>
               <span>Stage 2 · {settings.stage2DwellSec.toFixed(1)}s</span>
+            </div>
+          </div>
+
+          {/* Custom Zone Presets */}
+          <div className="zone-presets-block">
+            <div className="slider-head">
+              <span className="slider-label">Watched zones</span>
+              <span className="slider-value">Choose 1 or more</span>
+            </div>
+            <div className="tag-row" role="group" aria-label="Detection zones">
+              {ZONE_OPTIONS.map((z) => {
+                const active = settings.activeZones.includes(z.id);
+                return (
+                  <button
+                    key={z.id}
+                    type="button"
+                    id={`zone-chip-${z.id}`}
+                    aria-pressed={active}
+                    className={`tag-chip ${active ? 'tag-chip--selected' : ''}`}
+                    onClick={() => toggleZone(z.id)}
+                  >
+                    {z.label}
+                  </button>
+                );
+              })}
             </div>
           </div>
 
@@ -347,7 +372,10 @@ export function CalibrationDrawer({
                 value={settings.stage1DwellSec}
                 onChange={(e) => {
                   const next1 = parseFloat(e.target.value);
-                  const next2 = Math.max(settings.stage2DwellSec, Number((next1 + 0.6).toFixed(1)));
+                  const next2 = Math.max(
+                    settings.stage2DwellSec,
+                    Number((next1 + 0.6).toFixed(1))
+                  );
                   onUpdateSettings({ stage1DwellSec: next1, stage2DwellSec: next2 });
                 }}
               />
@@ -369,15 +397,21 @@ export function CalibrationDrawer({
                 value={settings.stage2DwellSec}
                 onChange={(e) => {
                   const next2 = parseFloat(e.target.value);
-                  const next1 = Math.min(settings.stage1DwellSec, Number((next2 - 0.6).toFixed(1)));
-                  onUpdateSettings({ stage1DwellSec: Math.max(0.6, next1), stage2DwellSec: next2 });
+                  const next1 = Math.min(
+                    settings.stage1DwellSec,
+                    Number((next2 - 0.6).toFixed(1))
+                  );
+                  onUpdateSettings({
+                    stage1DwellSec: Math.max(0.6, next1),
+                    stage2DwellSec: next2,
+                  });
                 }}
               />
             </label>
 
             <label className="slider-row" htmlFor="slider-zone-scale">
               <div className="slider-head">
-                <span className="slider-label">Eyebrow halo zone (eye-width normalized)</span>
+                <span className="slider-label">Halo radius (eye-width normalized)</span>
                 <span className="slider-value tabular">
                   {settings.zoneScale < 0.85
                     ? 'Tight'
@@ -399,6 +433,30 @@ export function CalibrationDrawer({
                 }
               />
             </label>
+          </div>
+
+          {/* Pinch-Aware Filter Toggle */}
+          <div className="pinch-filter-row">
+            <div className="toggle-copy">
+              <span className="slider-label">Pinch-posture filter (reduces false alarms)</span>
+              <span className="toggle-desc">
+                Only alert when thumb &amp; index/middle fingertips are pinched close together —
+                ignores open-palm resting or quick glasses adjustments.
+              </span>
+            </div>
+            <button
+              type="button"
+              id="toggle-pinch-filter"
+              role="switch"
+              aria-checked={settings.pinchFilterEnabled}
+              aria-label="Toggle pinch-posture false alarm filter"
+              className={`switch ${settings.pinchFilterEnabled ? 'switch--on' : ''}`}
+              onClick={() =>
+                onUpdateSettings({ pinchFilterEnabled: !settings.pinchFilterEnabled })
+              }
+            >
+              <span className="switch-thumb" />
+            </button>
           </div>
 
           <div className="diagnostics-foot">

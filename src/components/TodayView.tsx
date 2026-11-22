@@ -3,6 +3,7 @@ import type {
   DaySummary,
   EngineStatus,
   FrameGeometry,
+  PiPKind,
   Stage1AutoCatch,
   StillSettings,
   VisionDiagnostics,
@@ -22,6 +23,15 @@ interface TodayViewProps {
   onStop: () => void;
   onTestStage1: () => void;
   onTestStage2: () => void;
+  pipSupported: boolean;
+  pipKind: PiPKind;
+  pipError: string | null;
+  onTogglePiP: () => void;
+  recentFalseAlarms: number;
+  onTuneAddDwell: () => void;
+  onTuneTightenZone: () => void;
+  onTuneEnablePinch: () => void;
+  onDismissFalseAlarmNudge: () => void;
   stage1AutoCatch: Stage1AutoCatch | null;
   onCancelStage1FalseAlarm: () => void;
   welcomeBack: WelcomeBackPrompt | null;
@@ -48,6 +58,15 @@ export function TodayView({
   onStop,
   onTestStage1,
   onTestStage2,
+  pipSupported,
+  pipKind,
+  pipError,
+  onTogglePiP,
+  recentFalseAlarms,
+  onTuneAddDwell,
+  onTuneTightenZone,
+  onTuneEnablePinch,
+  onDismissFalseAlarmNudge,
   stage1AutoCatch,
   onCancelStage1FalseAlarm,
   welcomeBack,
@@ -64,12 +83,13 @@ export function TodayView({
 }: TodayViewProps) {
   const isRunning = status === 'running';
   const isBusy = status === 'requesting-camera' || status === 'loading-models';
+  const pipActive = pipKind !== 'none';
 
   const headline = (() => {
     if (status === 'requesting-camera') return 'Opening your front camera locally.';
     if (status === 'loading-models') return 'Preparing on-device awareness.';
     if (status === 'running') {
-      if (frameGeometry?.handInZone) return 'Noticing a hand near your brow.';
+      if (frameGeometry?.handInZone) return 'Noticing a hand in your watched zone.';
       if (diagnostics.faceState === 'away') return 'Waiting quietly until you return.';
       return 'You are here. Hands at ease.';
     }
@@ -85,8 +105,11 @@ export function TodayView({
       return 'Loading bundled MediaPipe face and hand models from local cache.';
     }
     if (status === 'running') {
+      if (pipActive) {
+        return 'Floating in Picture-in-Picture at 4 FPS. Switch to another app or tab freely.';
+      }
       return diagnostics.faceState === 'cached'
-        ? 'Occlusion cache holding your brow zone steady.'
+        ? 'Occlusion cache holding your watched zone steady.'
         : 'Watching gently at 4 FPS on-device. Keep reading or working as usual.';
     }
     return '100% on-device eyebrow awareness. Zero cloud calls, zero video saved.';
@@ -103,6 +126,54 @@ export function TodayView({
           onGraceReturn={onWelcomeGrace}
           onDismiss={onWelcomeDismiss}
         />
+      )}
+
+      {/* Adaptive False-Alarm Learning Nudge */}
+      {recentFalseAlarms >= 2 && (
+        <section className="nudge-card" aria-label="Adaptive sensitivity tuning">
+          <div className="welcome-header">
+            <span className="section-label">Adaptive tuning</span>
+            <button
+              type="button"
+              className="text-link-btn text-link-btn--muted"
+              onClick={onDismissFalseAlarmNudge}
+            >
+              Keep as is
+            </button>
+          </div>
+          <p className="nudge-copy">
+            You dismissed {recentFalseAlarms} false alarms recently (like adjusting glasses or a
+            quick scratch). Want to soften sensitivity by one small step?
+          </p>
+          <div className="welcome-actions">
+            <button
+              type="button"
+              id="btn-tune-dwell"
+              className="btn btn-subtle btn-sm"
+              onClick={onTuneAddDwell}
+            >
+              Add +0.2s dwell ({(settings.stage1DwellSec + 0.2).toFixed(1)}s)
+            </button>
+            <button
+              type="button"
+              id="btn-tune-zone"
+              className="btn btn-subtle btn-sm"
+              onClick={onTuneTightenZone}
+            >
+              Tighten zone (−10%)
+            </button>
+            {!settings.pinchFilterEnabled && (
+              <button
+                type="button"
+                id="btn-tune-pinch"
+                className="btn btn-subtle btn-sm"
+                onClick={onTuneEnablePinch}
+              >
+                Enable pinch filter
+              </button>
+            )}
+          </div>
+        </section>
       )}
 
       {/* Hero Stillness Section */}
@@ -136,6 +207,17 @@ export function TodayView({
             </button>
           )}
 
+          {pipSupported && (
+            <button
+              type="button"
+              id="btn-toggle-pip"
+              className={`btn btn-lg ${pipActive ? 'btn-subtle' : 'btn-ghost'}`}
+              onClick={onTogglePiP}
+            >
+              {pipActive ? 'Close floating PiP' : 'Float PiP'}
+            </button>
+          )}
+
           <button
             type="button"
             id="btn-test-cue"
@@ -146,9 +228,9 @@ export function TodayView({
           </button>
         </div>
 
-        {errorMessage && (
+        {(errorMessage || pipError) && (
           <p className="inline-error" role="alert">
-            {errorMessage}
+            {errorMessage || pipError}
           </p>
         )}
 
@@ -158,7 +240,7 @@ export function TodayView({
             <span className="autocatch-text">
               {stage1AutoCatch.handClearedAt
                 ? `Hand lowered — auto-catching redirect in ${stage1AutoCatch.remainingSec}s`
-                : 'Hand near brow — lower gently to redirect'}
+                : 'Hand near zone — lower gently to redirect'}
             </span>
             <button
               type="button"
@@ -246,8 +328,8 @@ export function TodayView({
                 </span>
               </div>
               <p className="toggle-desc">
-                Calm HRT pause sheet with breath pacing, auto-catch, Grace recovery, and False
-                alarm.
+                Calm HRT pause sheet with glowing light, breath pacing, auto-catch, Grace recovery,
+                and False alarm.
               </p>
             </div>
             <button

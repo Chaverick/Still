@@ -4,10 +4,17 @@ import {
   HandLandmarker,
   type NormalizedLandmark,
 } from '@mediapipe/tasks-vision';
-import type { DelegateMode, FrameGeometry, Point2D } from '../types';
+import type {
+  DelegateMode,
+  DetectionZoneId,
+  FrameGeometry,
+  Point2D,
+  ZoneGeometry,
+} from '../types';
 
 const OCCLUSION_CACHE_MS = 1500;
 const BASE_HALO_RATIO = 0.24; // fraction of outer-eye-to-outer-eye span at zoneScale = 1.0
+const PINCH_RATIO_THRESHOLD = 0.62; // thumb-to-index/middle distance relative to palm size
 
 // Standard MediaPipe 468-point Face Mesh landmark indices
 const FACE_OVAL_IDX = [
@@ -16,10 +23,13 @@ const FACE_OVAL_IDX = [
   21, 54, 103, 67, 109,
 ];
 
+// Subject's right brow (image left) & subject's left brow (image right)
 const RIGHT_BROW_IDX = [70, 63, 105, 66, 107, 55, 65, 52, 53, 46];
 const LEFT_BROW_IDX = [300, 293, 334, 296, 336, 285, 295, 282, 283, 276];
 const RIGHT_EYE_IDX = [33, 160, 158, 133, 153, 144];
 const LEFT_EYE_IDX = [362, 385, 387, 263, 373, 380];
+// Upper forehead perimeter arc used to project the hairline/scalp zone
+const FOREHEAD_ARC_IDX = [21, 54, 103, 67, 109, 10, 338, 297, 332, 284, 251];
 
 // Outer eye corners for stable distance normalization (invariant to blinking)
 const OUTER_EYE_LEFT_IMG = 33;
@@ -35,7 +45,14 @@ interface CachedFace {
   rightBrow: Point2D[];
   leftEye: Point2D[];
   rightEye: Point2D[];
+  hairline: Point2D[];
   eyeSpan: number;
+}
+
+export interface DetectOptions {
+  zoneScale: number;
+  activeZones: DetectionZoneId[];
+  pinchFilterEnabled: boolean;
 }
 
 function resolveLocalUrl(relativePath: string): string {
@@ -60,15 +77,23 @@ function distIso(a: Point2D, b: Point2D, aspect: number): number {
 }
 
 /**
- * Minimum isotropic distance from point p to a closed/open polyline of points.
+ * Minimum isotropic distance from point p to an open or closed polyline.
  */
-function distPointToPolylineIso(p: Point2D, poly: Point2D[], aspect: number): number {
+function distPointToPolylineIso(
+  p: Point2D,
+  poly: Point2D[],
+  aspect: number,
+  closed: boolean
+): number {
   if (poly.length === 0) return Infinity;
+  if (poly.length === 1) return distIso(p, poly[0], aspect);
+
   let minD = Infinity;
   const px = p.x * aspect;
   const py = p.y;
+  const segCount = closed ? poly.length : poly.length - 1;
 
-  for (let i = 0; i < poly.length; i++) {
+  for (let i = 0; i < segCount; i++) {
     const a = poly[i];
     const b = poly[(i + 1) % poly.length];
     const ax = a.x * aspect;
@@ -89,6 +114,27 @@ function distPointToPolylineIso(p: Point2D, poly: Point2D[], aspect: number): nu
     if (d < minD) minD = d;
   }
   return minD;
+}
+
+/**
+ * Scale-invariant hand pinch check: true when thumb tip (4) is close to
+ * index tip (8) or middle tip (12) relative to palm length (wrist 0 -> middle MCP 9).
+ */
+function isHandPinching(hand: NormalizedLandmark[], aspect: number): boolean {
+  const wrist = hand[0];
+  const midMcp = hand[9];
+  const thumbTip = hand[4];
+  const indexTip = hand[8];
+  const middleTip = hand[12];
+  if (!wrist || !midMcp || !thumbTip || !indexTip) return true;
+
+  const palmLen = Math.max(0.03, distIso(wrist, midMcp, aspect));
+  const thumbIndex = distIso(thumbTip, indexTip, aspect) / palmLen;
+  const thumbMiddle = middleTip
+    ? distIso(thumbTip, middleTip, aspect) / palmLen
+    : Infinity;
+
+  return Math.min(thumbIndex, thumbMiddle) <= PINCH_RATIO_THRESHOLD;
 }
 
 export class LocalVisionEngine {
@@ -177,7 +223,7 @@ export class LocalVisionEngine {
         await tryDelegate('GPU');
         return;
       } catch {
-        // Silent graceful fallback to CPU delegate (common on older iPadOS / WebGL limits)
+        // Silent graceful fallback to CPU delegate
       }
     }
 
@@ -189,7 +235,7 @@ export class LocalVisionEngine {
    */
   detectFrame(
     video: HTMLVideoElement,
-    zoneScale: number,
+    options: DetectOptions,
     nowMs: number = performance.now()
   ): FrameGeometry | null {
     if (!this.faceLandmarker || !this.handLandmarker) return null;
@@ -212,7 +258,6 @@ export class LocalVisionEngine {
     } catch {
       this.consecutiveGpuErrors += 1;
       if (this.delegate === 'GPU' && this.consecutiveGpuErrors >= 3 && !this.initializing) {
-        // Runtime GPU failure fallback -> CPU seamlessly
         this.initializing = this.loadWithFallback(true).finally(() => {
           this.initializing = null;
         });
@@ -229,6 +274,14 @@ export class LocalVisionEngine {
       const rightOuter = faceLandmarks[OUTER_EYE_RIGHT_IMG];
       const eyeSpan = Math.max(0.05, distIso(leftOuter, rightOuter, aspect));
 
+      // Project hairline slightly above upper forehead oval landmarks
+      const forehead = pickPoints(faceLandmarks, FOREHEAD_ARC_IDX);
+      const liftY = eyeSpan * 0.16;
+      const hairline = forehead.map((p) => ({
+        x: p.x,
+        y: Math.max(0.01, p.y - liftY),
+      }));
+
       activeFace = {
         timestamp: nowMs,
         faceOval: pickPoints(faceLandmarks, FACE_OVAL_IDX),
@@ -236,6 +289,7 @@ export class LocalVisionEngine {
         rightBrow: pickPoints(faceLandmarks, RIGHT_BROW_IDX),
         leftEye: pickPoints(faceLandmarks, LEFT_EYE_IDX),
         rightEye: pickPoints(faceLandmarks, RIGHT_EYE_IDX),
+        hairline,
         eyeSpan,
       };
       this.cachedFace = activeFace;
@@ -247,8 +301,58 @@ export class LocalVisionEngine {
     }
 
     const haloRadius = activeFace
-      ? activeFace.eyeSpan * BASE_HALO_RATIO * zoneScale
+      ? activeFace.eyeSpan * BASE_HALO_RATIO * options.zoneScale
       : 0;
+
+    // Build active zone polylines according to user's selected presets
+    const activeZones: ZoneGeometry[] = [];
+    const selected =
+      options.activeZones.length > 0
+        ? options.activeZones
+        : (['left-brow', 'right-brow'] as DetectionZoneId[]);
+
+    if (activeFace && haloRadius > 0) {
+      if (selected.includes('left-brow')) {
+        activeZones.push({
+          id: 'left-brow',
+          points: activeFace.leftBrow,
+          closed: true,
+          radius: haloRadius,
+        });
+      }
+      if (selected.includes('right-brow')) {
+        activeZones.push({
+          id: 'right-brow',
+          points: activeFace.rightBrow,
+          closed: true,
+          radius: haloRadius,
+        });
+      }
+      if (selected.includes('lashes')) {
+        activeZones.push(
+          {
+            id: 'lashes',
+            points: activeFace.leftEye,
+            closed: true,
+            radius: haloRadius * 0.78,
+          },
+          {
+            id: 'lashes',
+            points: activeFace.rightEye,
+            closed: true,
+            radius: haloRadius * 0.78,
+          }
+        );
+      }
+      if (selected.includes('hairline')) {
+        activeZones.push({
+          id: 'hairline',
+          points: activeFace.hairline,
+          closed: false,
+          radius: haloRadius * 1.15,
+        });
+      }
+    }
 
     const fingertips: FrameGeometry['fingertips'] = [];
     let handInZone = false;
@@ -257,33 +361,35 @@ export class LocalVisionEngine {
     const hands = handResult.landmarks ?? [];
     for (let h = 0; h < hands.length; h++) {
       const hand = hands[h];
+      const pinching = isHandPinching(hand, aspect);
+      const passesPinch = !options.pinchFilterEnabled || pinching;
+
       for (const idx of TRACKED_HAND_INDICES) {
         const pt = hand[idx];
         if (!pt) continue;
 
         let inZone = false;
-        if (activeFace && haloRadius > 0) {
-          const dLeft = distPointToPolylineIso(pt, activeFace.leftBrow, aspect);
-          const dRight = distPointToPolylineIso(pt, activeFace.rightBrow, aspect);
-          const minD = Math.min(dLeft, dRight);
-          const ratio = minD / haloRadius;
-          if (closestRatio === null || ratio < closestRatio) {
-            closestRatio = ratio;
-          }
-          if (minD <= haloRadius) {
-            inZone = true;
-            handInZone = true;
+        if (activeZones.length > 0) {
+          for (const zone of activeZones) {
+            const d = distPointToPolylineIso(pt, zone.points, aspect, zone.closed);
+            const ratio = d / zone.radius;
+            if (closestRatio === null || ratio < closestRatio) {
+              closestRatio = ratio;
+            }
+            if (d <= zone.radius && passesPinch) {
+              inZone = true;
+              handInZone = true;
+            }
           }
         }
 
-        // Only expose the 4 main fingertips visually for clean calibration dots,
-        // while still using DIP/IP for zone contact above
         if (idx === 4 || idx === 8 || idx === 12 || idx === 16 || inZone) {
           fingertips.push({
             x: pt.x,
             y: pt.y,
             inZone,
             handIndex: h,
+            pinching,
           });
         }
       }
@@ -295,10 +401,9 @@ export class LocalVisionEngine {
       facePresent: activeFace !== null,
       usingOcclusionCache,
       faceOval: activeFace?.faceOval ?? [],
-      leftBrow: activeFace?.leftBrow ?? [],
-      rightBrow: activeFace?.rightBrow ?? [],
       leftEye: activeFace?.leftEye ?? [],
       rightEye: activeFace?.rightEye ?? [],
+      activeZones,
       eyeSpan: activeFace?.eyeSpan ?? 0,
       haloRadius,
       fingertips,

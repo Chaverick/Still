@@ -5,15 +5,26 @@ import {
   getEmptyDay,
   getLocalDateKey,
 } from '../lib/storage';
-import type { DaySummary } from '../types';
+import type { AwarenessEvent, DaySummary, NoteEntry } from '../types';
 
 type MetricKey = 'calm' | 'redirectRate' | 'redirected' | 'grace';
 
 interface ProgressViewProps {
   days: Record<string, DaySummary>;
+  events: AwarenessEvent[];
+  notes: NoteEntry[];
   onExportData: () => void;
   onImportFile: (file: File) => void;
 }
+
+const TIME_BLOCKS = [
+  { id: 'early', label: '5–9a', name: 'Early morning', start: 5, end: 9 },
+  { id: 'morning', label: '9a–1p', name: 'Late morning', start: 9, end: 13 },
+  { id: 'afternoon', label: '1–5p', name: 'Afternoon', start: 13, end: 17 },
+  { id: 'evening', label: '5–9p', name: 'Evening', start: 17, end: 21 },
+  { id: 'late', label: '9p–1a', name: 'Late night', start: 21, end: 25 },
+  { id: 'overnight', label: '1–5a', name: 'Overnight', start: 1, end: 5 },
+] as const;
 
 interface DayRow {
   dateKey: string;
@@ -46,6 +57,8 @@ function formatDeltaCalm(deltaSec: number): string {
 
 export function ProgressView({
   days,
+  events,
+  notes,
   onExportData,
   onImportFile,
 }: ProgressViewProps) {
@@ -205,6 +218,60 @@ export function ProgressView({
     return { raw, maxVal };
   }, [last14Days, metric]);
 
+  // High-risk time-of-day heatmap & trigger context breakdown
+  const heatmapData = useMemo(() => {
+    const urgeEvents = events.filter(
+      (e) =>
+        e.kind === 'redirect-stage1' ||
+        e.kind === 'redirect-stage2' ||
+        e.kind === 'grace'
+    );
+
+    const blocks = TIME_BLOCKS.map((b) => ({
+      ...b,
+      count: 0,
+      redirected: 0,
+      grace: 0,
+    }));
+
+    for (const ev of urgeEvents) {
+      const hr = new Date(ev.timestamp).getHours();
+      const normHr = hr === 0 ? 24 : hr;
+      const bucket = blocks.find((b) => normHr >= b.start && normHr < b.end);
+      if (bucket) {
+        bucket.count += 1;
+        if (ev.kind === 'grace') bucket.grace += 1;
+        else bucket.redirected += 1;
+      }
+    }
+
+    const maxCount = Math.max(1, ...blocks.map((b) => b.count));
+    const peak = [...blocks].sort((a, b) => b.count - a.count)[0];
+
+    const tagCounts: Record<string, number> = {};
+    for (const ev of events) {
+      if (ev.tag) {
+        tagCounts[ev.tag] = (tagCounts[ev.tag] ?? 0) + 1;
+      }
+    }
+    for (const n of notes) {
+      for (const t of n.tags) {
+        tagCounts[t] = (tagCounts[t] ?? 0) + 1;
+      }
+    }
+    const topTags = Object.entries(tagCounts)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 6);
+
+    return {
+      blocks,
+      maxCount,
+      totalUrges: urgeEvents.length,
+      peak: peak && peak.count > 0 ? peak : null,
+      topTags,
+    };
+  }, [events, notes]);
+
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
@@ -349,6 +416,70 @@ export function ProgressView({
               )}
             </div>
           </div>
+        </div>
+      </section>
+
+      {/* High-Risk Time-of-Day & Trigger Heatmap */}
+      <section className="editorial-section" aria-label="Time of day and trigger patterns">
+        <div className="section-head-row">
+          <h2 className="section-heading">When urges cluster</h2>
+          <span className="section-meta">
+            {heatmapData.totalUrges > 0
+              ? `${heatmapData.totalUrges} noticed moments mapped`
+              : 'Fills in as moments are noticed'}
+          </span>
+        </div>
+
+        <div className="heatmap-card">
+          <div className="heatmap-grid" role="list" aria-label="Time of day urge heatmap">
+            {heatmapData.blocks.map((block) => {
+              const intensity =
+                block.count === 0 ? 0 : Math.max(0.18, block.count / heatmapData.maxCount);
+              return (
+                <div
+                  key={block.id}
+                  role="listitem"
+                  className="heatmap-cell"
+                  style={{
+                    backgroundColor:
+                      intensity === 0
+                        ? undefined
+                        : `rgba(201, 100, 66, ${(intensity * 0.42).toFixed(2)})`,
+                  }}
+                >
+                  <span className="heatmap-count tabular">{block.count}</span>
+                  <span className="heatmap-window">{block.label}</span>
+                  <span className="heatmap-name">{block.name}</span>
+                </div>
+              );
+            })}
+          </div>
+
+          {heatmapData.peak ? (
+            <p className="heatmap-insight">
+              Urges cluster most during <strong>{heatmapData.peak.name.toLowerCase()}</strong> (
+              {heatmapData.peak.label}). Keeping a smooth stone, pen, or warm mug within reach
+              before that window helps interrupt autopilot early.
+            </p>
+          ) : (
+            <p className="heatmap-insight">
+              As Still catches urges or logs grace recoveries, this map highlights your highest-risk
+              hours so you can prepare sensory anchors ahead of time.
+            </p>
+          )}
+
+          {heatmapData.topTags.length > 0 && (
+            <div className="trigger-tags-strip">
+              <span className="trigger-tags-label">Common contexts</span>
+              <div className="tag-row">
+                {heatmapData.topTags.map(([tag, count]) => (
+                  <span key={tag} className="trigger-pill">
+                    {tag} <span className="tabular">· {count}</span>
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       </section>
 

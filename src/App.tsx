@@ -1,10 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { EdgeGlow } from './components/EdgeGlow';
 import { NotesView } from './components/NotesView';
 import { PauseSheet } from './components/PauseSheet';
+import { PipWindowContent } from './components/PipWindowContent';
 import { ProgressView } from './components/ProgressView';
 import { TodayView } from './components/TodayView';
 import { WhatWorksView } from './components/WhatWorksView';
+import { usePictureInPicture } from './hooks/usePictureInPicture';
 import { useStillSession } from './hooks/useStillSession';
 import { unlockAudio } from './lib/audio';
 import {
@@ -32,6 +35,8 @@ import type {
   ThemeMode,
 } from './types';
 
+const FALSE_ALARM_WINDOW_MS = 15 * 60 * 1000;
+
 function getInitialTheme(): ThemeMode {
   try {
     const saved = localStorage.getItem('still:theme');
@@ -53,6 +58,8 @@ export function App() {
   const [events, setEvents] = useState<AwarenessEvent[]>(loadEvents);
   const [notes, setNotes] = useState<NoteEntry[]>(loadNotes);
   const [calibrationOpen, setCalibrationOpen] = useState(false);
+  const [pipActive, setPipActive] = useState(false);
+  const [falseAlarmTimestamps, setFalseAlarmTimestamps] = useState<number[]>([]);
 
   const [pauseSheetState, setPauseSheetState] = useState<{
     open: boolean;
@@ -96,6 +103,14 @@ export function App() {
     });
   }, []);
 
+  const recordFalseAlarmMoment = useCallback(() => {
+    const now = Date.now();
+    setFalseAlarmTimestamps((prev) => [
+      ...prev.filter((ts) => now - ts <= FALSE_ALARM_WINDOW_MS),
+      now,
+    ]);
+  }, []);
+
   const handleAddCalmSecond = useCallback(() => {
     updateTodaySummary((cur) => ({ ...cur, calmSeconds: cur.calmSeconds + 1 }));
   }, [updateTodaySummary]);
@@ -126,16 +141,56 @@ export function App() {
     onStage1AutoCaught: handleStage1AutoCaught,
     onStage2Triggered: handleStage2Triggered,
     pauseSheetOpen: pauseSheetState.open,
+    pipActive,
   });
 
-  // Ensure webkit-playsinline attribute is explicitly set on the live video element for iPadOS Safari
+  const todayKey = getLocalDateKey();
+  const today = days[todayKey] ?? getEmptyDay(todayKey);
+
+  const pip = usePictureInPicture({
+    theme,
+    status: session.status,
+    calmSeconds: today.calmSeconds,
+    urgesRedirected: today.urgesRedirected,
+    handInZone: Boolean(session.frameGeometry?.handInZone),
+    stage1Glow: session.edgeGlowActive,
+    stage2AlertOpen: pauseSheetState.open,
+    faceState: session.diagnostics.faceState,
+  });
+
+  useEffect(() => {
+    setPipActive(pip.pipActive);
+  }, [pip.pipActive]);
+
+  // Ensure webkit-playsinline attribute is explicitly set on live video elements for iPadOS Safari
   useEffect(() => {
     const v = session.videoRef.current;
     if (v) {
       v.setAttribute('webkit-playsinline', 'true');
       v.setAttribute('playsinline', 'true');
     }
-  }, [session.videoRef]);
+    const pv = pip.pipVideoRef.current;
+    if (pv) {
+      pv.setAttribute('webkit-playsinline', 'true');
+      pv.setAttribute('playsinline', 'true');
+    }
+  }, [session.videoRef, pip.pipVideoRef]);
+
+  // Stage 1 inline false alarm cancel
+  const handleCancelStage1FalseAlarm = useCallback(() => {
+    session.cancelStage1FalseAlarm();
+    recordFalseAlarmMoment();
+    updateTodaySummary((cur) => ({
+      ...cur,
+      falseAlarms: cur.falseAlarms + 1,
+    }));
+    appendEvent({
+      id: createId(),
+      timestamp: Date.now(),
+      dateKey: getLocalDateKey(),
+      kind: 'false-alarm',
+    });
+  }, [appendEvent, recordFalseAlarmMoment, session, updateTodaySummary]);
 
   // Undo a Stage 1 auto-catch as a false alarm from the whisper bar
   const handleUndoAutoCatchAsFalseAlarm = useCallback(
@@ -157,10 +212,11 @@ export function App() {
         dateKey,
         kind: 'false-alarm',
       });
+      recordFalseAlarmMoment();
       session.dismissWhisper();
       session.showWhisper('Undone · marked as false alarm', undefined, 3500);
     },
-    [appendEvent, session, updateTodaySummary]
+    [appendEvent, recordFalseAlarmMoment, session, updateTodaySummary]
   );
 
   // Stage 2 PauseSheet handlers
@@ -232,9 +288,36 @@ export function App() {
         dateKey,
         kind: 'false-alarm',
       });
+      recordFalseAlarmMoment();
       session.showWhisper('Dismissed as false alarm', undefined, 3500);
     }
-  }, [appendEvent, pauseSheetState.isPreview, session, updateTodaySummary]);
+  }, [appendEvent, pauseSheetState.isPreview, recordFalseAlarmMoment, session, updateTodaySummary]);
+
+  // Adaptive false-alarm learning 1-tap tuning actions
+  const handleTuneAddDwell = useCallback(() => {
+    const next1 = Math.min(2.5, Number((settings.stage1DwellSec + 0.2).toFixed(1)));
+    const next2 = Math.min(4.5, Math.max(Number((settings.stage2DwellSec + 0.2).toFixed(1)), Number((next1 + 0.6).toFixed(1))));
+    updateSettings({ stage1DwellSec: next1, stage2DwellSec: next2 });
+    setFalseAlarmTimestamps([]);
+    session.showWhisper(`Dwell nudged to ${next1.toFixed(1)}s / ${next2.toFixed(1)}s`, undefined, 4000);
+  }, [session, settings.stage1DwellSec, settings.stage2DwellSec, updateSettings]);
+
+  const handleTuneTightenZone = useCallback(() => {
+    const nextZone = Math.max(0.65, Number((settings.zoneScale - 0.1).toFixed(2)));
+    updateSettings({ zoneScale: nextZone });
+    setFalseAlarmTimestamps([]);
+    session.showWhisper(`Halo tightened to ${Math.round(nextZone * 100)}%`, undefined, 4000);
+  }, [session, settings.zoneScale, updateSettings]);
+
+  const handleTuneEnablePinch = useCallback(() => {
+    updateSettings({ pinchFilterEnabled: true });
+    setFalseAlarmTimestamps([]);
+    session.showWhisper('Pinch-posture filter enabled · ignores open-palm scratches', undefined, 4500);
+  }, [session, updateSettings]);
+
+  const handleDismissFalseAlarmNudge = useCallback(() => {
+    setFalseAlarmTimestamps([]);
+  }, []);
 
   // Welcome Back check-in handlers
   const handleWelcomeCalm = useCallback(
@@ -368,11 +451,9 @@ export function App() {
     setDays({});
     setEvents([]);
     setNotes([]);
+    setFalseAlarmTimestamps([]);
     session.showWhisper('Local history cleared', undefined, 3500);
   }, [session]);
-
-  const todayKey = getLocalDateKey();
-  const today = days[todayKey] ?? getEmptyDay(todayKey);
 
   const totalCalmSeconds = useMemo(
     () => Object.values(days).reduce((acc, d) => acc + d.calmSeconds, 0),
@@ -400,6 +481,44 @@ export function App() {
         muted
         aria-hidden="true"
       />
+
+      {/* Offscreen canvas + video elements powering Canvas Video PiP on iPadOS Safari / Safari / Firefox */}
+      <canvas
+        ref={pip.canvasRef}
+        width={480}
+        height={280}
+        className="safari-live-video"
+        aria-hidden="true"
+      />
+      <video
+        ref={pip.pipVideoRef}
+        className="safari-live-video"
+        playsInline
+        muted
+        aria-hidden="true"
+      />
+
+      {/* Interactive Document Picture-in-Picture portal (Chrome / Edge desktop) */}
+      {pip.pipContainer &&
+        createPortal(
+          <PipWindowContent
+            status={session.status}
+            calmSeconds={today.calmSeconds}
+            urgesRedirected={today.urgesRedirected}
+            handInZone={Boolean(session.frameGeometry?.handInZone)}
+            stage1Glow={session.edgeGlowActive}
+            stage2AlertOpen={pauseSheetState.open}
+            faceState={session.diagnostics.faceState}
+            pinnedResponses={settings.pinnedResponses}
+            onStart={() => void session.startSession()}
+            onStop={session.stopSession}
+            onAutoCatch={handlePauseAutoCatch}
+            onGraceRecovery={() => handlePauseGraceRecovery()}
+            onFalseAlarm={handlePauseFalseAlarm}
+            onClosePiP={() => void pip.closePiP()}
+          />,
+          pip.pipContainer
+        )}
 
       {/* Minimal Claude-inspired Header */}
       <header className="top-header">
@@ -482,8 +601,20 @@ export function App() {
               unlockAudio();
               setPauseSheetState({ open: true, isPreview: true });
             }}
+            pipSupported={pip.isSupported}
+            pipKind={pip.pipKind}
+            pipError={pip.pipError}
+            onTogglePiP={() => {
+              unlockAudio();
+              void pip.togglePiP();
+            }}
+            recentFalseAlarms={falseAlarmTimestamps.length}
+            onTuneAddDwell={handleTuneAddDwell}
+            onTuneTightenZone={handleTuneTightenZone}
+            onTuneEnablePinch={handleTuneEnablePinch}
+            onDismissFalseAlarmNudge={handleDismissFalseAlarmNudge}
             stage1AutoCatch={session.stage1AutoCatch}
-            onCancelStage1FalseAlarm={session.cancelStage1FalseAlarm}
+            onCancelStage1FalseAlarm={handleCancelStage1FalseAlarm}
             welcomeBack={session.welcomeBack}
             onWelcomeCalm={handleWelcomeCalm}
             onWelcomeRedirect={handleWelcomeRedirect}
@@ -501,6 +632,8 @@ export function App() {
         {activeTab === 'progress' && (
           <ProgressView
             days={days}
+            events={events}
+            notes={notes}
             onExportData={handleExportData}
             onImportFile={handleImportFile}
           />

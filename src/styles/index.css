@@ -1822,6 +1822,251 @@ input[type='range'] {
 }
 
 /* ==========================================================================
+   Adaptive False-Alarm Tuning Nudge & Custom Zones / Pinch Filter
+   ========================================================================== */
+
+.nudge-card {
+  padding: 18px 20px;
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  border: 1px solid color-mix(in srgb, var(--accent) 32%, var(--border));
+  box-shadow: var(--shadow-sm);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.nudge-copy {
+  margin: 0;
+  font-size: 14px;
+  color: var(--ink-secondary);
+}
+
+.zone-presets-block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.pinch-filter-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+/* ==========================================================================
+   Time-of-Day Urge Heatmap & Common Context Triggers
+   ========================================================================== */
+
+.heatmap-card {
+  padding: 20px 18px;
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-sm);
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.heatmap-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.heatmap-cell {
+  padding: 14px 8px 12px;
+  border-radius: var(--radius-md);
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 3px;
+}
+
+.heatmap-count {
+  font-family: var(--font-serif);
+  font-size: 22px;
+  line-height: 1.1;
+  color: var(--ink);
+}
+
+.heatmap-window {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ink);
+}
+
+.heatmap-name {
+  font-size: 11px;
+  color: var(--ink-muted);
+}
+
+.heatmap-insight {
+  margin: 0;
+  font-size: 14px;
+  color: var(--ink-secondary);
+}
+
+.trigger-tags-strip {
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.trigger-tags-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ink-muted);
+}
+
+.trigger-pill {
+  padding: 4px 11px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  font-size: 12.5px;
+  color: var(--ink);
+}
+
+/* ==========================================================================
+   Document Picture-in-Picture Floating Mini-Window
+   ========================================================================== */
+
+.pip-doc-root {
+  min-height: 100vh;
+  background: var(--bg);
+  color: var(--ink);
+}
+
+.pip-shell {
+  min-height: 100vh;
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 14px;
+  background: var(--bg);
+  transition: box-shadow 300ms ease, background-color 300ms ease;
+}
+
+.pip-shell--stage1 {
+  box-shadow: inset 0 0 38px 12px var(--glow-amber);
+}
+
+.pip-shell--alert {
+  background: radial-gradient(
+    circle at 50% 35%,
+    rgba(232, 150, 74, 0.28) 0%,
+    var(--bg) 78%
+  );
+  box-shadow:
+    inset 0 0 0 4px rgba(236, 158, 82, 0.85),
+    inset 0 0 54px 16px rgba(232, 146, 72, 0.56);
+  animation: edge-beacon 2.2s ease-in-out infinite;
+}
+
+.pip-top-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.pip-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pip-orb {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--ink-muted);
+}
+
+.pip-orb--live {
+  background: var(--sage);
+  box-shadow: 0 0 0 4px var(--sage-soft);
+}
+
+.pip-orb--glow {
+  background: #E8964A;
+  box-shadow:
+    0 0 0 4px rgba(232, 150, 74, 0.34),
+    0 0 16px 4px rgba(232, 150, 74, 0.8);
+  animation: beacon-glow 1.8s ease-in-out infinite;
+}
+
+.pip-title {
+  font-family: var(--font-serif);
+  font-size: 18px;
+  font-weight: 500;
+}
+
+.pip-headline {
+  margin: 0;
+  font-family: var(--font-serif);
+  font-size: 22px;
+  font-weight: 400;
+  line-height: 1.2;
+}
+
+.pip-calm-body,
+.pip-alert-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  flex: 1;
+  justify-content: center;
+}
+
+.pip-prompt {
+  margin: 0;
+  font-size: 13px;
+  color: var(--ink-secondary);
+  line-height: 1.45;
+}
+
+.pip-metrics {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.pip-metric-label {
+  display: block;
+  font-size: 11px;
+  color: var(--ink-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.pip-metric-val {
+  font-family: var(--font-serif);
+  font-size: 21px;
+  color: var(--ink);
+}
+
+.pip-controls,
+.pip-alert-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* ==========================================================================
    Responsive Adjustments (iPad Portrait / Phone)
    ========================================================================== */
 
@@ -1863,6 +2108,10 @@ input[type='range'] {
 
   .trend-day-label {
     font-size: 9.5px;
+  }
+
+  .heatmap-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
   .history-header-row,

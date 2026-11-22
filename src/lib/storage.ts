@@ -95,6 +95,17 @@ export const CONTEXT_TAGS = [
   'After a walk',
 ];
 
+export const ZONE_OPTIONS: Array<{
+  id: 'left-brow' | 'right-brow' | 'lashes' | 'hairline';
+  label: string;
+  shortLabel: string;
+}> = [
+  { id: 'left-brow', label: 'Left eyebrow', shortLabel: 'Left brow' },
+  { id: 'right-brow', label: 'Right eyebrow', shortLabel: 'Right brow' },
+  { id: 'lashes', label: 'Eyelashes', shortLabel: 'Eyelashes' },
+  { id: 'hairline', label: 'Hairline / scalp', shortLabel: 'Hairline' },
+];
+
 export const DEFAULT_SETTINGS: StillSettings = {
   stage1Enabled: true,
   stage2Enabled: true,
@@ -103,6 +114,8 @@ export const DEFAULT_SETTINGS: StillSettings = {
   stage1DwellSec: 1.2,
   stage2DwellSec: 2.6,
   zoneScale: 1.0,
+  activeZones: ['left-brow', 'right-brow'],
+  pinchFilterEnabled: false,
   previewMode: 'silhouette',
   pinnedResponses: ['palms-flat', 'thumb-index-press'],
   checkedAnchors: [],

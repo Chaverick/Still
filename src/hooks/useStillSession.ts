@@ -28,6 +28,7 @@ interface UseStillSessionOptions {
   onStage1AutoCaught: () => string; // returns created event ID for optional false-alarm undo
   onStage2Triggered: () => void;
   pauseSheetOpen: boolean;
+  pipActive: boolean;
 }
 
 export function useStillSession({
@@ -36,6 +37,7 @@ export function useStillSession({
   onStage1AutoCaught,
   onStage2Triggered,
   pauseSheetOpen,
+  pipActive,
 }: UseStillSessionOptions) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -46,6 +48,8 @@ export function useStillSession({
   settingsRef.current = settings;
   const pauseSheetOpenRef = useRef(pauseSheetOpen);
   pauseSheetOpenRef.current = pauseSheetOpen;
+  const pipActiveRef = useRef(pipActive);
+  pipActiveRef.current = pipActive;
   const onAddCalmSecondRef = useRef(onAddCalmSecond);
   onAddCalmSecondRef.current = onAddCalmSecond;
   const onStage1AutoCaughtRef = useRef(onStage1AutoCaught);
@@ -182,7 +186,7 @@ export function useStillSession({
     }));
   }, [resetDwellState, stopCameraTracks]);
 
-  const runLoop = useCallback(() => {
+  const stepDetection = useCallback(() => {
     if (!runningRef.current) return;
 
     const now = performance.now();
@@ -198,7 +202,15 @@ export function useStillSession({
       const s = settingsRef.current;
 
       if (video && engine && engine.isReady) {
-        const frame = engine.detectFrame(video, s.zoneScale, now);
+        const frame = engine.detectFrame(
+          video,
+          {
+            zoneScale: s.zoneScale,
+            activeZones: s.activeZones,
+            pinchFilterEnabled: s.pinchFilterEnabled,
+          },
+          now
+        );
         if (frame) {
           // Measure rolling FPS
           fpsSamplesRef.current.push(now);
@@ -343,8 +355,25 @@ export function useStillSession({
       }
     }
 
-    rafRef.current = requestAnimationFrame(runLoop);
   }, [showWhisper]);
+
+  const runLoop = useCallback(() => {
+    if (!runningRef.current) return;
+    stepDetection();
+    rafRef.current = requestAnimationFrame(runLoop);
+  }, [stepDetection]);
+
+  // PiP background heartbeat: when main tab is hidden behind another app while PiP floats,
+  // requestAnimationFrame pauses, so this lightweight 250ms interval keeps 4 FPS running smoothly.
+  useEffect(() => {
+    if (status !== 'running' || !pipActive) return;
+    const id = window.setInterval(() => {
+      if (document.visibilityState === 'hidden' || pipActiveRef.current) {
+        stepDetection();
+      }
+    }, TARGET_INTERVAL_MS);
+    return () => window.clearInterval(id);
+  }, [status, pipActive, stepDetection]);
 
   /**
    * CRITICAL iPadOS Safari Fix:
@@ -456,7 +485,7 @@ export function useStillSession({
     if (status !== 'running') return;
     const interval = window.setInterval(() => {
       if (pauseSheetOpenRef.current || welcomeBackRef.current) return;
-      if (document.visibilityState !== 'visible') return;
+      if (document.visibilityState !== 'visible' && !pipActiveRef.current) return;
       const sinceFace = Date.now() - lastFaceSeenMsRef.current;
       if (sinceFace <= AWAY_PAUSE_CALM_MS) {
         onAddCalmSecondRef.current();
@@ -470,11 +499,13 @@ export function useStillSession({
     const onVisibility = () => {
       if (!runningRef.current) return;
       if (document.visibilityState === 'hidden') {
-        hiddenAtMsRef.current = Date.now();
+        if (!pipActiveRef.current) {
+          hiddenAtMsRef.current = Date.now();
+        }
       } else if (document.visibilityState === 'visible') {
         const hiddenAt = hiddenAtMsRef.current;
         hiddenAtMsRef.current = null;
-        if (hiddenAt) {
+        if (hiddenAt && !pipActiveRef.current) {
           const awayMs = Date.now() - hiddenAt;
           if (awayMs >= WELCOME_BACK_THRESHOLD_MS) {
             setWelcomeBack({
