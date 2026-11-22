@@ -291,9 +291,6 @@ export function useStillSession({
               // Stage 2 trigger (~2.6s default)
               const effectiveStage2 = Math.max(s.stage2DwellSec, s.stage1DwellSec + 0.5);
               if (s.stage2Enabled && nextDwell >= effectiveStage2) {
-                if (!stage1FiredRef.current && s.soundEnabled) {
-                  playSingingBowl('grounding');
-                }
                 dwellRef.current = 0;
                 stage1FiredRef.current = false;
                 stage1ClearedAtRef.current = null;

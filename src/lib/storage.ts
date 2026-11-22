@@ -99,6 +99,7 @@ export const DEFAULT_SETTINGS: StillSettings = {
   stage1Enabled: true,
   stage2Enabled: true,
   soundEnabled: true,
+  stage2RepeatChime: true,
   stage1DwellSec: 1.2,
   stage2DwellSec: 2.6,
   zoneScale: 1.0,
@@ -216,3 +217,95 @@ export function clearAllLocalData(): void {
     // ignore
   }
 }
+
+export interface StillBackupPayload {
+  days?: Record<string, DaySummary>;
+  events?: AwarenessEvent[];
+  notes?: NoteEntry[];
+}
+
+/**
+ * Smartly merges an exported Still JSON backup into current local state
+ * so day-over-day progress can be carried between browsers or computers.
+ */
+export function mergeBackupPayload(
+  current: {
+    days: Record<string, DaySummary>;
+    events: AwarenessEvent[];
+    notes: NoteEntry[];
+  },
+  incoming: StillBackupPayload
+): {
+  days: Record<string, DaySummary>;
+  events: AwarenessEvent[];
+  notes: NoteEntry[];
+  addedDays: number;
+} {
+  const mergedDays: Record<string, DaySummary> = { ...current.days };
+  let addedDays = 0;
+
+  if (incoming.days && typeof incoming.days === 'object') {
+    for (const [key, day] of Object.entries(incoming.days)) {
+      if (!day || typeof day !== 'object' || !/^\d{4}-\d{2}-\d{2}$/.test(key)) continue;
+      const existing = mergedDays[key];
+      if (!existing) {
+        mergedDays[key] = {
+          dateKey: key,
+          calmSeconds: Math.max(0, Number(day.calmSeconds) || 0),
+          urgesRedirected: Math.max(0, Number(day.urgesRedirected) || 0),
+          graceRecoveries: Math.max(0, Number(day.graceRecoveries) || 0),
+          falseAlarms: Math.max(0, Number(day.falseAlarms) || 0),
+        };
+        addedDays += 1;
+      } else {
+        mergedDays[key] = {
+          dateKey: key,
+          calmSeconds: Math.max(existing.calmSeconds, Number(day.calmSeconds) || 0),
+          urgesRedirected: Math.max(
+            existing.urgesRedirected,
+            Number(day.urgesRedirected) || 0
+          ),
+          graceRecoveries: Math.max(
+            existing.graceRecoveries,
+            Number(day.graceRecoveries) || 0
+          ),
+          falseAlarms: Math.max(existing.falseAlarms, Number(day.falseAlarms) || 0),
+        };
+      }
+    }
+  }
+
+  const eventMap = new Map<string, AwarenessEvent>();
+  for (const ev of current.events) eventMap.set(ev.id, ev);
+  if (Array.isArray(incoming.events)) {
+    for (const ev of incoming.events) {
+      if (ev && typeof ev.id === 'string' && typeof ev.timestamp === 'number') {
+        eventMap.set(ev.id, ev);
+      }
+    }
+  }
+  const mergedEvents = Array.from(eventMap.values())
+    .sort((a, b) => b.timestamp - a.timestamp)
+    .slice(0, 500);
+
+  const noteMap = new Map<string, NoteEntry>();
+  for (const n of current.notes) noteMap.set(n.id, n);
+  if (Array.isArray(incoming.notes)) {
+    for (const n of incoming.notes) {
+      if (n && typeof n.id === 'string' && typeof n.text === 'string') {
+        noteMap.set(n.id, n);
+      }
+    }
+  }
+  const mergedNotes = Array.from(noteMap.values())
+    .sort((a, b) => b.timestamp - a.timestamp)
+    .slice(0, 300);
+
+  return {
+    days: mergedDays,
+    events: mergedEvents,
+    notes: mergedNotes,
+    addedDays,
+  };
+}
+

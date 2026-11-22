@@ -1,5 +1,5 @@
 export type ThemeMode = 'light' | 'dark';
-export type TabId = 'today' | 'what-works' | 'notes';
+export type TabId = 'today' | 'progress' | 'what-works' | 'notes';
 export type PreviewMode = 'silhouette' | 'camera';
 export type DelegateMode = 'GPU' | 'CPU' | null;
 
@@ -7,6 +7,7 @@ export interface StillSettings {
   stage1Enabled: boolean;
   stage2Enabled: boolean;
   soundEnabled: boolean;
+  stage2RepeatChime: boolean;
   stage1DwellSec: number; // default 1.2s
   stage2DwellSec: number; // default 2.6s
   zoneScale: number; // multiplier on eye-width normalized halo, default 1.0 (maps to ~0.26 * eyeSpan)

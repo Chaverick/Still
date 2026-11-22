@@ -267,7 +267,7 @@ export function TodayView({
             <div className="toggle-copy">
               <div className="toggle-title">Singing-bowl chime audio</div>
               <p className="toggle-desc">
-                Synthesized locally via Web Audio. Turn off for visual-only edge glow in quiet
+                Synthesized locally via Web Audio. Turn off for visual-only glowing light in quiet
                 rooms.
               </p>
             </div>
@@ -279,6 +279,29 @@ export function TodayView({
               aria-label="Toggle singing-bowl chime audio"
               className={`switch ${settings.soundEnabled ? 'switch--on' : ''}`}
               onClick={() => onUpdateSettings({ soundEnabled: !settings.soundEnabled })}
+            >
+              <span className="switch-thumb" />
+            </button>
+          </div>
+
+          <div className="toggle-row">
+            <div className="toggle-copy">
+              <div className="toggle-title">Repeat soft chime during pause alert</div>
+              <p className="toggle-desc">
+                Gently repeats the singing bowl every few seconds alongside the glowing light until
+                you respond or mute it.
+              </p>
+            </div>
+            <button
+              type="button"
+              id="toggle-repeat-chime"
+              role="switch"
+              aria-checked={settings.stage2RepeatChime}
+              aria-label="Toggle repeating chime during Stage 2 pause alert"
+              className={`switch ${settings.stage2RepeatChime ? 'switch--on' : ''}`}
+              onClick={() =>
+                onUpdateSettings({ stage2RepeatChime: !settings.stage2RepeatChime })
+              }
             >
               <span className="switch-thumb" />
             </button>

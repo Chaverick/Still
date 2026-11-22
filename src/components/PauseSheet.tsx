@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
-import { playSingingBowl } from '../lib/audio';
+import { playSingingBowl, unlockAudio } from '../lib/audio';
 import { COMPETING_RESPONSES, CONTEXT_TAGS } from '../lib/storage';
 import type { CompetingResponse } from '../types';
 
 const PAUSE_DURATION_SEC = 60;
+const REPEAT_CHIME_INTERVAL_MS = 3800;
 
 interface PauseSheetProps {
   open: boolean;
@@ -11,6 +12,7 @@ interface PauseSheetProps {
   handInZone: boolean;
   sessionRunning: boolean;
   soundEnabled: boolean;
+  repeatChimeEnabled: boolean;
   pinnedResponses: string[];
   onAutoCatch: (responseId: string) => void;
   onGraceRecovery: (tag?: string) => void;
@@ -23,6 +25,7 @@ export function PauseSheet({
   handInZone,
   sessionRunning,
   soundEnabled,
+  repeatChimeEnabled,
   pinnedResponses,
   onAutoCatch,
   onGraceRecovery,
@@ -38,18 +41,39 @@ export function PauseSheet({
   const [remainingSec, setRemainingSec] = useState(PAUSE_DURATION_SEC);
   const [graceStep, setGraceStep] = useState(false);
   const [selectedTag, setSelectedTag] = useState<string | undefined>(undefined);
+  const [chimeMutedThisAlert, setChimeMutedThisAlert] = useState(false);
 
   const currentResponse = orderedResponses[responseIndex % orderedResponses.length];
 
-  // Reset countdown whenever sheet opens
+  // Reset countdown & chime mute whenever sheet opens
   useEffect(() => {
     if (!open) return;
     setRemainingSec(PAUSE_DURATION_SEC);
     setGraceStep(false);
     setSelectedTag(undefined);
+    setChimeMutedThisAlert(false);
     setResponseIndex((prev) => (prev + 1) % orderedResponses.length);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
+
+  // Prominent gentle repeating singing-bowl chime while the alert popup is active
+  const chimeActivelyRepeating =
+    open && !graceStep && soundEnabled && repeatChimeEnabled && !chimeMutedThisAlert;
+
+  useEffect(() => {
+    if (!open || graceStep || !soundEnabled || chimeMutedThisAlert) return;
+
+    // Soft immediate chime when the alert opens
+    playSingingBowl('repeat');
+
+    if (!repeatChimeEnabled) return;
+
+    const repeatTimer = window.setInterval(() => {
+      playSingingBowl('repeat');
+    }, REPEAT_CHIME_INTERVAL_MS);
+
+    return () => window.clearInterval(repeatTimer);
+  }, [open, graceStep, soundEnabled, repeatChimeEnabled, chimeMutedThisAlert]);
 
   // 60-second HRT countdown -> auto-catch on completion
   useEffect(() => {
@@ -85,23 +109,54 @@ export function PauseSheet({
 
   return (
     <div
-      className="sheet-backdrop"
+      className="sheet-backdrop sheet-backdrop--glow"
       role="dialog"
       aria-modal="true"
       aria-labelledby="pause-sheet-title"
     >
-      <div className="sheet-card">
+      {/* Prominent luminous warm ambient halo behind the alert card */}
+      <div className="sheet-aura" aria-hidden="true" />
+
+      <div
+        className={`sheet-card sheet-card--prominent ${
+          handInZone ? 'sheet-card--urgent' : ''
+        }`}
+      >
         <div className="sheet-eyebrow-row">
-          <span className="sheet-kicker">
-            {isPreview ? 'Pause sheet preview · HRT' : 'Gentle pause · Competing response'}
-          </span>
-          {sessionRunning && (
+          <div className="sheet-beacon-group">
             <span
-              className={`hand-state-chip ${handInZone ? 'hand-state-chip--near' : 'hand-state-chip--clear'}`}
-            >
-              {handInZone ? 'Lower hand to lap' : 'Hands clear'}
+              className={`sheet-beacon ${
+                sessionRunning && !handInZone ? 'sheet-beacon--calm' : ''
+              }`}
+              aria-hidden="true"
+            />
+            <span className="sheet-kicker">
+              {isPreview ? 'Alert preview · HRT pause' : 'Gentle pause · Hands down'}
             </span>
-          )}
+          </div>
+
+          <div className="sheet-header-pills">
+            {soundEnabled && !graceStep && (
+              <button
+                type="button"
+                id="btn-toggle-alert-chime"
+                className={`chime-pill ${chimeActivelyRepeating ? 'chime-pill--active' : ''}`}
+                onClick={() => {
+                  unlockAudio();
+                  setChimeMutedThisAlert((m) => !m);
+                }}
+              >
+                {chimeActivelyRepeating ? 'Chime repeating · Mute' : 'Chime muted · Unmute'}
+              </button>
+            )}
+            {sessionRunning && (
+              <span
+                className={`hand-state-chip ${handInZone ? 'hand-state-chip--near' : 'hand-state-chip--clear'}`}
+              >
+                {handInZone ? 'Lower hand to lap' : 'Hands clear'}
+              </span>
+            )}
+          </div>
         </div>
 
         {!graceStep ? (
@@ -110,7 +165,7 @@ export function PauseSheet({
               Let the urge crest and pass.
             </h2>
 
-            <div className="breath-timer-wrap">
+            <div className="breath-timer-wrap breath-timer-wrap--luminous">
               <svg className="breath-ring" viewBox="0 0 132 132" aria-hidden="true">
                 <circle
                   className="breath-ring-track"
@@ -150,7 +205,7 @@ export function PauseSheet({
             </div>
 
             <p className="sheet-subnote">
-              Auto-catches when the minute finishes, or choose below whenever you are ready.
+              Soft chime repeats gently until you respond or the 60s pause auto-catches.
             </p>
 
             <div className="sheet-actions">
@@ -212,7 +267,7 @@ export function PauseSheet({
                 className="btn btn-primary"
                 onClick={() => onGraceRecovery(selectedTag)}
               >
-                Save grace recovery & continue
+                Save grace recovery &amp; continue
               </button>
               <button
                 type="button"

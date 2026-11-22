@@ -1,11 +1,17 @@
 interface EdgeGlowProps {
-  active: boolean;
+  intensity: 'none' | 'gentle' | 'prominent';
 }
 
-export function EdgeGlow({ active }: EdgeGlowProps) {
+export function EdgeGlow({ intensity }: EdgeGlowProps) {
   return (
     <div
-      className={`edge-glow ${active ? 'edge-glow--active' : ''}`}
+      className={`edge-glow ${
+        intensity === 'prominent'
+          ? 'edge-glow--prominent'
+          : intensity === 'gentle'
+            ? 'edge-glow--active'
+            : ''
+      }`}
       aria-hidden="true"
     />
   );

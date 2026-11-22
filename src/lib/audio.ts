@@ -40,9 +40,11 @@ export function unlockAudio(): void {
 
 /**
  * Plays a warm, organic Tibetan/crystal singing-bowl chime.
- * @param variant 'gentle' (Stage 1 notice) | 'grounding' (Stage 2 pause / completion)
+ * @param variant 'gentle' (Stage 1 notice) | 'repeat' (Stage 2 gentle constant repeat) | 'grounding' (completion)
  */
-export function playSingingBowl(variant: 'gentle' | 'grounding' = 'gentle'): void {
+export function playSingingBowl(
+  variant: 'gentle' | 'repeat' | 'grounding' = 'gentle'
+): void {
   const ctx = getAudioContext();
   if (!ctx) return;
   if (ctx.state === 'suspended') {
@@ -53,18 +55,24 @@ export function playSingingBowl(variant: 'gentle' | 'grounding' = 'gentle'): voi
   const master = ctx.createGain();
   const filter = ctx.createBiquadFilter();
   filter.type = 'lowpass';
-  filter.frequency.setValueAtTime(variant === 'gentle' ? 2200 : 1800, now);
+  filter.frequency.setValueAtTime(
+    variant === 'grounding' ? 1800 : variant === 'repeat' ? 2050 : 2200,
+    now
+  );
   filter.Q.setValueAtTime(0.7, now);
 
+  const peakGain = variant === 'gentle' ? 0.18 : variant === 'repeat' ? 0.125 : 0.15;
+  const totalDecay = variant === 'grounding' ? 3.8 : variant === 'repeat' ? 2.9 : 3.1;
+
   master.gain.setValueAtTime(0.0001, now);
-  master.gain.linearRampToValueAtTime(variant === 'gentle' ? 0.18 : 0.14, now + 0.045);
-  master.gain.exponentialRampToValueAtTime(0.0001, now + (variant === 'gentle' ? 3.1 : 3.8));
+  master.gain.linearRampToValueAtTime(peakGain, now + 0.045);
+  master.gain.exponentialRampToValueAtTime(0.0001, now + totalDecay);
 
   master.connect(filter);
   filter.connect(ctx.destination);
 
   // Warm harmonic partials inspired by a real cast singing bowl
-  const baseFreq = variant === 'gentle' ? 396 : 330; // G4-ish warm / E4 grounding
+  const baseFreq = variant === 'grounding' ? 330 : 396; // G4-ish warm / E4 grounding
   const partials: Array<{ ratio: number; detune: number; gain: number; decay: number }> = [
     { ratio: 1.0, detune: 0, gain: 0.65, decay: 3.0 },
     { ratio: 1.0035, detune: 2, gain: 0.35, decay: 2.8 }, // subtle organic shimmer beat

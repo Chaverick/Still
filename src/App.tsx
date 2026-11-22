@@ -2,9 +2,11 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { EdgeGlow } from './components/EdgeGlow';
 import { NotesView } from './components/NotesView';
 import { PauseSheet } from './components/PauseSheet';
+import { ProgressView } from './components/ProgressView';
 import { TodayView } from './components/TodayView';
 import { WhatWorksView } from './components/WhatWorksView';
 import { useStillSession } from './hooks/useStillSession';
+import { unlockAudio } from './lib/audio';
 import {
   clearAllLocalData,
   createId,
@@ -14,10 +16,12 @@ import {
   loadEvents,
   loadNotes,
   loadSettings,
+  mergeBackupPayload,
   saveDays,
   saveEvents,
   saveNotes,
   saveSettings,
+  type StillBackupPayload,
 } from './lib/storage';
 import type {
   AwarenessEvent,
@@ -330,6 +334,35 @@ export function App() {
     URL.revokeObjectURL(url);
   }, [days, events, notes, settings]);
 
+  const handleImportFile = useCallback(
+    (file: File) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        try {
+          const parsed = JSON.parse(String(reader.result)) as StillBackupPayload;
+          const merged = mergeBackupPayload({ days, events, notes }, parsed);
+          setDays(merged.days);
+          setEvents(merged.events);
+          setNotes(merged.notes);
+          saveDays(merged.days);
+          saveEvents(merged.events);
+          saveNotes(merged.notes);
+          session.showWhisper(
+            merged.addedDays > 0
+              ? `Imported & merged ${merged.addedDays} new ${merged.addedDays === 1 ? 'day' : 'days'} of history`
+              : 'Backup merged with your local history',
+            undefined,
+            4500
+          );
+        } catch {
+          session.showWhisper('Could not read that JSON backup file', undefined, 4500);
+        }
+      };
+      reader.readAsText(file);
+    },
+    [days, events, notes, session]
+  );
+
   const handleClearData = useCallback(() => {
     clearAllLocalData();
     setDays({});
@@ -346,10 +379,16 @@ export function App() {
     [days]
   );
 
+  const glowIntensity = pauseSheetState.open
+    ? 'prominent'
+    : session.edgeGlowActive
+      ? 'gentle'
+      : 'none';
+
   return (
     <div className="app-shell">
-      {/* Warm peripheral edge glow (Stage 1 visual cue) */}
-      <EdgeGlow active={session.edgeGlowActive} />
+      {/* Warm peripheral glowing light (gentle on Stage 1, prominent pulsing beacon on Stage 2) */}
+      <EdgeGlow intensity={glowIntensity} />
 
       {/* CRITICAL iPadOS Safari Fix: keep <video autoplay playsinline muted> visibly rendered
           at 2x2px opacity 0.001 (never hidden / display:none) across all views */}
@@ -383,6 +422,15 @@ export function App() {
               onClick={() => setActiveTab('today')}
             >
               Today
+            </button>
+            <button
+              type="button"
+              id="nav-progress"
+              className={`nav-tab ${activeTab === 'progress' ? 'nav-tab--active' : ''}`}
+              aria-current={activeTab === 'progress' ? 'page' : undefined}
+              onClick={() => setActiveTab('progress')}
+            >
+              Progress
             </button>
             <button
               type="button"
@@ -430,7 +478,10 @@ export function App() {
             onStart={() => void session.startSession()}
             onStop={session.stopSession}
             onTestStage1={session.triggerTestCue}
-            onTestStage2={() => setPauseSheetState({ open: true, isPreview: true })}
+            onTestStage2={() => {
+              unlockAudio();
+              setPauseSheetState({ open: true, isPreview: true });
+            }}
             stage1AutoCatch={session.stage1AutoCatch}
             onCancelStage1FalseAlarm={session.cancelStage1FalseAlarm}
             welcomeBack={session.welcomeBack}
@@ -444,6 +495,14 @@ export function App() {
             frameGeometry={session.frameGeometry}
             dwellSec={session.dwellSec}
             diagnostics={session.diagnostics}
+          />
+        )}
+
+        {activeTab === 'progress' && (
+          <ProgressView
+            days={days}
+            onExportData={handleExportData}
+            onImportFile={handleImportFile}
           />
         )}
 
@@ -493,6 +552,7 @@ export function App() {
         handInZone={Boolean(session.frameGeometry?.handInZone)}
         sessionRunning={session.status === 'running'}
         soundEnabled={settings.soundEnabled}
+        repeatChimeEnabled={settings.stage2RepeatChime}
         pinnedResponses={settings.pinnedResponses}
         onAutoCatch={handlePauseAutoCatch}
         onGraceRecovery={handlePauseGraceRecovery}
