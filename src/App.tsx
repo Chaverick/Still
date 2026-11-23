@@ -59,6 +59,7 @@ export function App() {
   const [notes, setNotes] = useState<NoteEntry[]>(loadNotes);
   const [calibrationOpen, setCalibrationOpen] = useState(false);
   const [pipActive, setPipActive] = useState(false);
+  const [pipWindowRef, setPipWindowRef] = useState<Window | null>(null);
   const [falseAlarmTimestamps, setFalseAlarmTimestamps] = useState<number[]>([]);
 
   const [pauseSheetState, setPauseSheetState] = useState<{
@@ -142,6 +143,7 @@ export function App() {
     onStage2Triggered: handleStage2Triggered,
     pauseSheetOpen: pauseSheetState.open,
     pipActive,
+    pipWindow: pipWindowRef,
   });
 
   const todayKey = getLocalDateKey();
@@ -159,6 +161,9 @@ export function App() {
       faceState: session.diagnostics.faceState,
       sideAngle: session.diagnostics.sideAngle,
       cameraState: session.diagnostics.cameraState,
+      cameraStalled: session.diagnostics.cameraStalled,
+      detectCount: session.diagnostics.detectCount,
+      handsCount: session.diagnostics.handsCount,
       fps: session.diagnostics.fps,
       dwellSec: session.dwellSec,
       stage2DwellSec: settings.stage2DwellSec,
@@ -168,7 +173,8 @@ export function App() {
 
   useEffect(() => {
     setPipActive(pip.pipActive);
-  }, [pip.pipActive]);
+    setPipWindowRef(pip.pipWindow);
+  }, [pip.pipActive, pip.pipWindow]);
 
   // Ensure webkit-playsinline attribute is explicitly set on live video elements for iPadOS Safari
   useEffect(() => {
@@ -518,6 +524,14 @@ export function App() {
             stage1Glow={session.edgeGlowActive}
             stage2AlertOpen={pauseSheetState.open}
             faceState={session.diagnostics.faceState}
+            sideAngle={session.diagnostics.sideAngle}
+            cameraState={session.diagnostics.cameraState}
+            cameraStalled={session.diagnostics.cameraStalled}
+            detectCount={session.diagnostics.detectCount}
+            handsCount={session.diagnostics.handsCount}
+            fps={session.diagnostics.fps}
+            dwellSec={session.dwellSec}
+            stage2DwellSec={settings.stage2DwellSec}
             pinnedResponses={settings.pinnedResponses}
             onStart={() => {
               pip.primeCanvasVideo();

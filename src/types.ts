@@ -103,6 +103,8 @@ export interface VisionDiagnostics {
   faceState: 'detected' | 'cached' | 'away';
   sideAngle: boolean;
   cameraState: 'live' | 'muted' | 'ended';
+  cameraStalled: boolean;
+  detectCount: number;
   handsCount: number;
   modelsCached: boolean;
   wakeLockActive: boolean;

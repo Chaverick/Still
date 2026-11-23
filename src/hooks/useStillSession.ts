@@ -1,10 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import {
-  playSingingBowl,
-  startSilentKeepAlive,
-  stopSilentKeepAlive,
-  unlockAudio,
-} from '../lib/audio';
+import { playSingingBowl, unlockAudio } from '../lib/audio';
 import { checkModelsCached, LocalVisionEngine } from '../lib/vision';
 import { WakeLockController } from '../lib/wakeLock';
 import type {
@@ -18,6 +13,7 @@ import type {
 
 const TARGET_INTERVAL_MS = 250; // 4 FPS loop
 const HAND_FLICKER_HOLD_MS = 380; // tolerate a brief 1-frame side-angle drop without losing dwell
+const CAMERA_STALL_MS = 2600; // flag if camera stops advancing frames for > 2.6s
 const STAGE1_AUTOCATCH_MS = 5000; // 5s auto-catch window after hand lowers
 const AWAY_PAUSE_CALM_MS = 30_000; // stop ticking calm time after 30s without face
 const WELCOME_BACK_THRESHOLD_MS = 5 * 60 * 1000; // 5 minutes stepped away / walk
@@ -31,10 +27,11 @@ export interface WhisperToast {
 interface UseStillSessionOptions {
   settings: StillSettings;
   onAddCalmSecond: () => void;
-  onStage1AutoCaught: () => string; // returns created event ID for optional false-alarm undo
+  onStage1AutoCaught: () => string;
   onStage2Triggered: () => void;
   pauseSheetOpen: boolean;
   pipActive: boolean;
+  pipWindow: Window | null;
 }
 
 export function useStillSession({
@@ -44,6 +41,7 @@ export function useStillSession({
   onStage2Triggered,
   pauseSheetOpen,
   pipActive,
+  pipWindow,
 }: UseStillSessionOptions) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -77,6 +75,8 @@ export function useStillSession({
     faceState: 'away',
     sideAngle: false,
     cameraState: 'ended',
+    cameraStalled: false,
+    detectCount: 0,
     handsCount: 0,
     modelsCached: false,
     wakeLockActive: false,
@@ -85,8 +85,12 @@ export function useStillSession({
   // Mutable loop state refs
   const runningRef = useRef(false);
   const rafRef = useRef<number | null>(null);
+  const rvfcRef = useRef<number | null>(null);
   const lastDetectMsRef = useRef(0);
   const lastHandInZoneMsRef = useRef(0);
+  const lastVideoTimeRef = useRef(-1);
+  const lastFrameAdvanceMsRef = useRef(0);
+  const detectCountRef = useRef(0);
   const dwellRef = useRef(0);
   const stage1FiredRef = useRef(false);
   const stage1StartedAtRef = useRef(0);
@@ -149,6 +153,15 @@ export function useStillSession({
   }, []);
 
   const stopCameraTracks = useCallback(() => {
+    const video = videoRef.current;
+    if (video && rvfcRef.current !== null && video.cancelVideoFrameCallback) {
+      try {
+        video.cancelVideoFrameCallback(rvfcRef.current);
+      } catch {
+        // ignore
+      }
+      rvfcRef.current = null;
+    }
     if (streamRef.current) {
       for (const track of streamRef.current.getTracks()) {
         try {
@@ -160,6 +173,7 @@ export function useStillSession({
       streamRef.current = null;
     }
     if (videoRef.current) {
+      videoRef.current.onpause = null;
       videoRef.current.srcObject = null;
     }
   }, []);
@@ -184,7 +198,6 @@ export function useStillSession({
     engineRef.current?.resetCache();
     void wakeLockRef.current?.disable();
     resetDwellState();
-    stopSilentKeepAlive();
     setFrameGeometry(null);
     setStatus('idle');
     setErrorMessage(null);
@@ -194,6 +207,7 @@ export function useStillSession({
       faceState: 'away',
       sideAngle: false,
       cameraState: 'ended',
+      cameraStalled: false,
       handsCount: 0,
     }));
   }, [resetDwellState, stopCameraTracks]);
@@ -204,183 +218,215 @@ export function useStillSession({
     const now = performance.now();
     const wallNow = Date.now();
 
-    if (now - lastDetectMsRef.current >= TARGET_INTERVAL_MS) {
-      const prevDetect = lastDetectMsRef.current || now - TARGET_INTERVAL_MS;
-      // Allow up to 1.2s dt so even if background Safari briefly slows to ~1 FPS, dwell stays accurate
-      const dt = Math.min(Math.max((now - prevDetect) / 1000, 0.05), 1.2);
-      lastDetectMsRef.current = now;
+    if (now - lastDetectMsRef.current < TARGET_INTERVAL_MS) {
+      return;
+    }
 
-      const track = streamRef.current?.getVideoTracks()[0];
-      const liveCamState: 'live' | 'muted' | 'ended' = !track || track.readyState !== 'live'
+    const prevDetect = lastDetectMsRef.current || now - TARGET_INTERVAL_MS;
+    const dt = Math.min(Math.max((now - prevDetect) / 1000, 0.05), 1.2);
+    lastDetectMsRef.current = now;
+
+    const track = streamRef.current?.getVideoTracks()[0];
+    const liveCamState: 'live' | 'muted' | 'ended' =
+      !track || track.readyState !== 'live'
         ? 'ended'
         : track.muted
           ? 'muted'
           : 'live';
 
-      if (liveCamState !== 'live') {
-        setDiagnostics((d) => ({
-          ...d,
-          fps: 0,
-          cameraState: liveCamState,
-        }));
-        return;
+    if (liveCamState !== 'live') {
+      setDiagnostics((d) => ({
+        ...d,
+        fps: 0,
+        cameraState: liveCamState,
+        cameraStalled: true,
+      }));
+      return;
+    }
+
+    const video = videoRef.current;
+    const engine = engineRef.current;
+    const s = settingsRef.current;
+
+    if (!video || !engine || !engine.isReady) return;
+
+    // CRITICAL iPadOS Safari PiP Fix:
+    // Entering Picture-in-Picture on the secondary PiP <video> causes Safari WebKit to pause
+    // other <video> elements on the page! Auto-resume the camera <video> immediately if paused.
+    if (video.paused && runningRef.current) {
+      video.play().catch(() => {});
+    }
+
+    // Track whether video.currentTime is actually advancing (detects silent OS camera freezes)
+    if (video.currentTime !== lastVideoTimeRef.current) {
+      lastVideoTimeRef.current = video.currentTime;
+      lastFrameAdvanceMsRef.current = now;
+    }
+    const cameraStalled =
+      lastFrameAdvanceMsRef.current > 0 &&
+      now - lastFrameAdvanceMsRef.current > CAMERA_STALL_MS;
+
+    if (cameraStalled) {
+      setDiagnostics((d) => ({
+        ...d,
+        fps: 0,
+        cameraState: 'live',
+        cameraStalled: true,
+      }));
+      return;
+    }
+
+    const frame = engine.detectFrame(
+      video,
+      {
+        zoneScale: s.zoneScale,
+        activeZones: s.activeZones,
+        pinchFilterEnabled: s.pinchFilterEnabled,
+      },
+      now
+    );
+
+    if (!frame) return;
+
+    detectCountRef.current += 1;
+
+    // Measure rolling FPS
+    fpsSamplesRef.current.push(now);
+    while (
+      fpsSamplesRef.current.length > 0 &&
+      now - fpsSamplesRef.current[0] > 2000
+    ) {
+      fpsSamplesRef.current.shift();
+    }
+    const measuredFps =
+      fpsSamplesRef.current.length > 1
+        ? ((fpsSamplesRef.current.length - 1) * 1000) /
+          Math.max(1, now - fpsSamplesRef.current[0])
+        : 4.0;
+
+    setFrameGeometry(frame);
+
+    const faceState = frame.facePresent
+      ? frame.usingOcclusionCache
+        ? 'cached'
+        : 'detected'
+      : 'away';
+    const handsCount = new Set(frame.fingertips.map((f) => f.handIndex)).size;
+
+    setDiagnostics((d) => ({
+      ...d,
+      delegate: engine.activeDelegate,
+      fps: Math.round(measuredFps * 10) / 10,
+      faceState,
+      sideAngle: frame.sideAngle,
+      cameraState: 'live',
+      cameraStalled: false,
+      detectCount: detectCountRef.current,
+      handsCount,
+    }));
+
+    // Track stepping away >= 5 minutes -> Welcome Back check-in on return
+    if (frame.facePresent) {
+      if (awaySinceMsRef.current !== null) {
+        const awayMs = wallNow - awaySinceMsRef.current;
+        if (awayMs >= WELCOME_BACK_THRESHOLD_MS && !welcomeBackRef.current) {
+          setWelcomeBack({
+            awayMinutes: Math.max(5, Math.round(awayMs / 60_000)),
+            reason: 'stepped-away',
+          });
+        }
+        awaySinceMsRef.current = null;
       }
+      lastFaceSeenMsRef.current = wallNow;
+    } else {
+      if (awaySinceMsRef.current === null) {
+        awaySinceMsRef.current = wallNow;
+      }
+    }
 
-      const video = videoRef.current;
-      const engine = engineRef.current;
-      const s = settingsRef.current;
+    // Two-stage gentle alerting logic (paused while PauseSheet or WelcomeBack is open)
+    if (!pauseSheetOpenRef.current && !welcomeBackRef.current) {
+      if (frame.handInZone) {
+        lastHandInZoneMsRef.current = now;
+        const nextDwell = Math.min(s.stage2DwellSec + 1.5, dwellRef.current + dt);
+        dwellRef.current = nextDwell;
+        setDwellSec(nextDwell);
 
-      if (video && engine && engine.isReady) {
-        const frame = engine.detectFrame(
-          video,
-          {
-            zoneScale: s.zoneScale,
-            activeZones: s.activeZones,
-            pinchFilterEnabled: s.pinchFilterEnabled,
-          },
-          now
-        );
-        if (frame) {
-          // Measure rolling FPS
-          fpsSamplesRef.current.push(now);
-          while (
-            fpsSamplesRef.current.length > 0 &&
-            now - fpsSamplesRef.current[0] > 2000
-          ) {
-            fpsSamplesRef.current.shift();
+        if (stage1FiredRef.current) {
+          stage1ClearedAtRef.current = null;
+          setEdgeGlowActive(true);
+          setStage1AutoCatch({
+            startedAt: stage1StartedAtRef.current,
+            handClearedAt: null,
+            remainingSec: 5,
+          });
+        }
+
+        // Stage 1 trigger (~1.2s default)
+        if (
+          s.stage1Enabled &&
+          !stage1FiredRef.current &&
+          nextDwell >= s.stage1DwellSec
+        ) {
+          stage1FiredRef.current = true;
+          stage1StartedAtRef.current = wallNow;
+          stage1ClearedAtRef.current = null;
+          setEdgeGlowActive(true);
+          if (s.soundEnabled) {
+            playSingingBowl('gentle');
           }
-          const measuredFps =
-            fpsSamplesRef.current.length > 1
-              ? ((fpsSamplesRef.current.length - 1) * 1000) /
-                Math.max(1, now - fpsSamplesRef.current[0])
-              : 4.0;
+          setStage1AutoCatch({
+            startedAt: wallNow,
+            handClearedAt: null,
+            remainingSec: 5,
+          });
+        }
 
-          setFrameGeometry(frame);
+        // Stage 2 trigger (~2.6s default)
+        const effectiveStage2 = Math.max(s.stage2DwellSec, s.stage1DwellSec + 0.5);
+        if (s.stage2Enabled && nextDwell >= effectiveStage2) {
+          dwellRef.current = 0;
+          stage1FiredRef.current = false;
+          stage1ClearedAtRef.current = null;
+          setDwellSec(0);
+          setStage1AutoCatch(null);
+          setEdgeGlowActive(false);
+          onStage2TriggeredRef.current();
+        }
+      } else {
+        const sinceInZone = now - lastHandInZoneMsRef.current;
+        if (dwellRef.current > 0 && sinceInZone >= HAND_FLICKER_HOLD_MS) {
+          const nextDwell = Math.max(0, dwellRef.current - dt * 1.1);
+          dwellRef.current = nextDwell;
+          setDwellSec(nextDwell);
+        }
 
-          const faceState = frame.facePresent
-            ? frame.usingOcclusionCache
-              ? 'cached'
-              : 'detected'
-            : 'away';
-          const handsCount = new Set(frame.fingertips.map((f) => f.handIndex)).size;
+        if (stage1FiredRef.current && sinceInZone >= HAND_FLICKER_HOLD_MS) {
+          if (stage1ClearedAtRef.current === null) {
+            stage1ClearedAtRef.current = wallNow;
+          }
+          const elapsedClearMs = wallNow - stage1ClearedAtRef.current;
 
-          setDiagnostics((d) => ({
-            ...d,
-            delegate: engine.activeDelegate,
-            fps: Math.round(measuredFps * 10) / 10,
-            faceState,
-            sideAngle: frame.sideAngle,
-            cameraState: 'live',
-            handsCount,
-          }));
+          if (elapsedClearMs >= 1000) {
+            setEdgeGlowActive(false);
+          }
 
-          // Track stepping away >= 5 minutes -> Welcome Back check-in on return
-          if (frame.facePresent) {
-            if (awaySinceMsRef.current !== null) {
-              const awayMs = wallNow - awaySinceMsRef.current;
-              if (awayMs >= WELCOME_BACK_THRESHOLD_MS && !welcomeBackRef.current) {
-                setWelcomeBack({
-                  awayMinutes: Math.max(5, Math.round(awayMs / 60_000)),
-                  reason: 'stepped-away',
-                });
-              }
-              awaySinceMsRef.current = null;
-            }
-            lastFaceSeenMsRef.current = wallNow;
+          const remainingMs = Math.max(0, STAGE1_AUTOCATCH_MS - elapsedClearMs);
+          if (remainingMs <= 0) {
+            stage1FiredRef.current = false;
+            stage1ClearedAtRef.current = null;
+            dwellRef.current = 0;
+            setDwellSec(0);
+            setStage1AutoCatch(null);
+            setEdgeGlowActive(false);
+            const eventId = onStage1AutoCaughtRef.current();
+            showWhisper('Hand lowered · urge redirected', eventId, 6500);
           } else {
-            if (awaySinceMsRef.current === null) {
-              awaySinceMsRef.current = wallNow;
-            }
-          }
-
-          // Two-stage gentle alerting logic (paused while PauseSheet or WelcomeBack is open)
-          if (!pauseSheetOpenRef.current && !welcomeBackRef.current) {
-            if (frame.handInZone) {
-              lastHandInZoneMsRef.current = now;
-              const nextDwell = Math.min(s.stage2DwellSec + 1.5, dwellRef.current + dt);
-              dwellRef.current = nextDwell;
-              setDwellSec(nextDwell);
-
-              // Hand returned during Stage 1 auto-catch window -> pause auto-catch countdown
-              if (stage1FiredRef.current) {
-                stage1ClearedAtRef.current = null;
-                setEdgeGlowActive(true);
-                setStage1AutoCatch({
-                  startedAt: stage1StartedAtRef.current,
-                  handClearedAt: null,
-                  remainingSec: 5,
-                });
-              }
-
-              // Stage 1 trigger (~1.2s default)
-              if (
-                s.stage1Enabled &&
-                !stage1FiredRef.current &&
-                nextDwell >= s.stage1DwellSec
-              ) {
-                stage1FiredRef.current = true;
-                stage1StartedAtRef.current = wallNow;
-                stage1ClearedAtRef.current = null;
-                setEdgeGlowActive(true);
-                if (s.soundEnabled) {
-                  playSingingBowl('gentle');
-                }
-                setStage1AutoCatch({
-                  startedAt: wallNow,
-                  handClearedAt: null,
-                  remainingSec: 5,
-                });
-              }
-
-              // Stage 2 trigger (~2.6s default)
-              const effectiveStage2 = Math.max(s.stage2DwellSec, s.stage1DwellSec + 0.5);
-              if (s.stage2Enabled && nextDwell >= effectiveStage2) {
-                dwellRef.current = 0;
-                stage1FiredRef.current = false;
-                stage1ClearedAtRef.current = null;
-                setDwellSec(0);
-                setStage1AutoCatch(null);
-                setEdgeGlowActive(false);
-                onStage2TriggeredRef.current();
-              }
-            } else {
-              // Brief 380ms flicker hold so a single missed side-angle hand frame never resets dwell
-              const sinceInZone = now - lastHandInZoneMsRef.current;
-              if (dwellRef.current > 0 && sinceInZone >= HAND_FLICKER_HOLD_MS) {
-                const nextDwell = Math.max(0, dwellRef.current - dt * 1.1);
-                dwellRef.current = nextDwell;
-                setDwellSec(nextDwell);
-              }
-
-              if (stage1FiredRef.current && sinceInZone >= HAND_FLICKER_HOLD_MS) {
-                if (stage1ClearedAtRef.current === null) {
-                  stage1ClearedAtRef.current = wallNow;
-                }
-                const elapsedClearMs = wallNow - stage1ClearedAtRef.current;
-
-                if (elapsedClearMs >= 1000) {
-                  setEdgeGlowActive(false);
-                }
-
-                const remainingMs = Math.max(0, STAGE1_AUTOCATCH_MS - elapsedClearMs);
-                if (remainingMs <= 0) {
-                  stage1FiredRef.current = false;
-                  stage1ClearedAtRef.current = null;
-                  dwellRef.current = 0;
-                  setDwellSec(0);
-                  setStage1AutoCatch(null);
-                  setEdgeGlowActive(false);
-                  const eventId = onStage1AutoCaughtRef.current();
-                  showWhisper('Hand lowered · urge redirected', eventId, 6500);
-                } else {
-                  setStage1AutoCatch({
-                    startedAt: stage1StartedAtRef.current,
-                    handClearedAt: stage1ClearedAtRef.current,
-                    remainingSec: Math.ceil(remainingMs / 1000),
-                  });
-                }
-              }
-            }
+            setStage1AutoCatch({
+              startedAt: stage1StartedAtRef.current,
+              handClearedAt: stage1ClearedAtRef.current,
+              remainingSec: Math.ceil(remainingMs / 1000),
+            });
           }
         }
       }
@@ -393,23 +439,47 @@ export function useStillSession({
     rafRef.current = requestAnimationFrame(runLoop);
   }, [stepDetection]);
 
-  // PiP background heartbeat + silent Web Audio clock so Safari doesn't throttle 4 FPS timers
+  // Whenever PiP activates, immediately verify camera <video> wasn't paused by Safari
+  // and drive detection via BOTH Document PiP's unthrottled rAF AND a 250ms interval!
   useEffect(() => {
-    if (status !== 'running' || !pipActive) {
-      stopSilentKeepAlive();
-      return;
-    }
-    startSilentKeepAlive();
-    const id = window.setInterval(() => {
-      if (document.visibilityState === 'hidden' || pipActiveRef.current) {
-        stepDetection();
+    if (status !== 'running' || !pipActive) return;
+
+    const resumeCam = () => {
+      const v = videoRef.current;
+      if (v && v.paused && runningRef.current) {
+        v.play().catch(() => {});
       }
-    }, TARGET_INTERVAL_MS);
-    return () => {
-      window.clearInterval(id);
-      stopSilentKeepAlive();
     };
-  }, [status, pipActive, stepDetection]);
+    resumeCam();
+    const t1 = window.setTimeout(resumeCam, 100);
+    const t2 = window.setTimeout(resumeCam, 400);
+
+    // 1. If Document PiP window is open (desktop Chrome/Edge), run its unthrottled rAF
+    let pipRafId: number | null = null;
+    if (pipWindow && !pipWindow.closed) {
+      const tickPipRaf = () => {
+        if (!runningRef.current || pipWindow.closed) return;
+        stepDetection();
+        pipRafId = pipWindow.requestAnimationFrame(tickPipRaf);
+      };
+      pipRafId = pipWindow.requestAnimationFrame(tickPipRaf);
+    }
+
+    // 2. Interval backup for Video PiP (iPadOS / macOS Safari)
+    const id = window.setInterval(() => {
+      resumeCam();
+      stepDetection();
+    }, TARGET_INTERVAL_MS);
+
+    return () => {
+      window.clearTimeout(t1);
+      window.clearTimeout(t2);
+      window.clearInterval(id);
+      if (pipRafId !== null && pipWindow && !pipWindow.closed) {
+        pipWindow.cancelAnimationFrame(pipRafId);
+      }
+    };
+  }, [status, pipActive, pipWindow, stepDetection]);
 
   /**
    * CRITICAL iPadOS Safari Fix:
@@ -459,15 +529,20 @@ export function useStillSession({
     streamRef.current = stream;
     const videoTrack = stream.getVideoTracks()[0];
     if (videoTrack) {
-      setDiagnostics((d) => ({ ...d, cameraState: videoTrack.muted ? 'muted' : 'live' }));
+      setDiagnostics((d) => ({
+        ...d,
+        cameraState: videoTrack.muted ? 'muted' : 'live',
+        cameraStalled: false,
+      }));
       videoTrack.onmute = () => {
-        setDiagnostics((d) => ({ ...d, cameraState: 'muted', fps: 0 }));
+        setDiagnostics((d) => ({ ...d, cameraState: 'muted', cameraStalled: true, fps: 0 }));
       };
       videoTrack.onunmute = () => {
-        setDiagnostics((d) => ({ ...d, cameraState: 'live' }));
+        lastFrameAdvanceMsRef.current = performance.now();
+        setDiagnostics((d) => ({ ...d, cameraState: 'live', cameraStalled: false }));
       };
       videoTrack.onended = () => {
-        setDiagnostics((d) => ({ ...d, cameraState: 'ended', fps: 0 }));
+        setDiagnostics((d) => ({ ...d, cameraState: 'ended', cameraStalled: true, fps: 0 }));
       };
     }
 
@@ -476,10 +551,19 @@ export function useStillSession({
       video.srcObject = stream;
       video.muted = true;
       video.playsInline = true;
+      // Auto-resume immediately if Safari pauses the camera video when PiP opens!
+      video.onpause = () => {
+        if (runningRef.current) {
+          window.setTimeout(() => {
+            if (runningRef.current && video.paused) {
+              video.play().catch(() => {});
+            }
+          }, 60);
+        }
+      };
       try {
         await video.play();
       } catch {
-        // Retry play once metadata loads
         await new Promise<void>((resolve) => {
           const onMeta = () => {
             video.removeEventListener('loadedmetadata', onMeta);
@@ -518,16 +602,30 @@ export function useStillSession({
       return;
     }
 
-    // 5. Start 4 FPS detection loop
+    // 5. Start 4 FPS detection loop (driven by rAF + requestVideoFrameCallback if supported)
     runningRef.current = true;
     lastDetectMsRef.current = 0;
+    lastVideoTimeRef.current = -1;
+    lastFrameAdvanceMsRef.current = performance.now();
+    detectCountRef.current = 0;
     lastFaceSeenMsRef.current = Date.now();
     awaySinceMsRef.current = null;
     fpsSamplesRef.current = [];
     resetDwellState();
     setStatus('running');
     rafRef.current = requestAnimationFrame(runLoop);
-  }, [resetDwellState, runLoop, status, stopCameraTracks]);
+
+    // Attach requestVideoFrameCallback on camera video so real camera frames directly drive detection
+    if (video && typeof video.requestVideoFrameCallback === 'function') {
+      const onVideoFrame = () => {
+        if (!runningRef.current) return;
+        lastFrameAdvanceMsRef.current = performance.now();
+        stepDetection();
+        rvfcRef.current = video.requestVideoFrameCallback?.(onVideoFrame) ?? null;
+      };
+      rvfcRef.current = video.requestVideoFrameCallback(onVideoFrame);
+    }
+  }, [resetDwellState, runLoop, status, stepDetection, stopCameraTracks]);
 
   // Cumulative calm time ticker (ticks every 1s while actively running & face present recently)
   useEffect(() => {
@@ -564,7 +662,6 @@ export function useStillSession({
           }
         }
 
-        // Check if iPadOS Safari ended the camera track while backgrounded
         const track = streamRef.current?.getVideoTracks()[0];
         if (!track || track.readyState !== 'live') {
           stopSession();

@@ -2019,6 +2019,50 @@ input[type='range'] {
   animation: beacon-glow 1.8s ease-in-out infinite;
 }
 
+.pip-orb--warn {
+  background: var(--accent);
+  box-shadow: 0 0 0 4px var(--accent-soft);
+}
+
+.pip-cam-banner {
+  padding: 8px 11px;
+  border-radius: 10px;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.pip-cam-banner--live {
+  background: var(--sage-soft);
+  border-color: color-mix(in srgb, var(--sage) 30%, transparent);
+}
+
+.pip-cam-banner--warn {
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+.pip-cam-line {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ink);
+}
+
+.pip-cam-banner--live .pip-cam-line {
+  color: var(--sage);
+}
+
+.pip-cam-banner--warn .pip-cam-line {
+  color: var(--accent);
+}
+
+.pip-cam-sub {
+  font-size: 11px;
+  color: var(--ink-muted);
+}
+
 .pip-title {
   font-family: var(--font-serif);
   font-size: 18px;

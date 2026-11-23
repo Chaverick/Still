@@ -9,6 +9,14 @@ interface PipWindowContentProps {
   stage1Glow: boolean;
   stage2AlertOpen: boolean;
   faceState: 'detected' | 'cached' | 'away';
+  sideAngle: boolean;
+  cameraState: 'live' | 'muted' | 'ended';
+  cameraStalled: boolean;
+  detectCount: number;
+  handsCount: number;
+  fps: number;
+  dwellSec: number;
+  stage2DwellSec: number;
   pinnedResponses: string[];
   onStart: () => void;
   onStop: () => void;
@@ -29,6 +37,14 @@ export function PipWindowContent({
   stage1Glow,
   stage2AlertOpen,
   faceState,
+  sideAngle,
+  cameraState,
+  cameraStalled,
+  detectCount,
+  handsCount,
+  fps,
+  dwellSec,
+  stage2DwellSec,
   pinnedResponses,
   onStart,
   onStop,
@@ -38,10 +54,31 @@ export function PipWindowContent({
   onClosePiP,
 }: PipWindowContentProps) {
   const isRunning = status === 'running';
-  const isGlowing = stage2AlertOpen || stage1Glow || handInZone;
+  const camBroken = isRunning && (cameraState !== 'live' || cameraStalled);
+  const camActivelyDetecting = isRunning && !camBroken && detectCount > 0;
+  const isGlowing = !camBroken && (stage2AlertOpen || stage1Glow || handInZone);
+  const dwellPct = Math.min(100, Math.round((dwellSec / Math.max(0.5, stage2DwellSec)) * 100));
 
   const topResponse =
     COMPETING_RESPONSES.find((r) => pinnedResponses.includes(r.id)) ?? COMPETING_RESPONSES[0];
+
+  const confirmText = !isRunning
+    ? 'Camera off · Click Begin session'
+    : camBroken
+      ? 'Camera paused by browser · Click Still tab'
+      : camActivelyDetecting
+        ? `Camera in use · Detecting live (${fps.toFixed(1)} FPS · #${detectCount})`
+        : 'Camera starting · Waiting for first frame…';
+
+  const faceMeta = !isRunning
+    ? 'Paused'
+    : camBroken
+      ? 'Detection stopped'
+      : faceState === 'away'
+        ? 'No face in view'
+        : faceState === 'cached'
+          ? `Cached · ${handsCount} ${handsCount === 1 ? 'hand' : 'hands'}`
+          : `${sideAngle ? 'Side angle' : 'Face locked'} · ${handsCount} ${handsCount === 1 ? 'hand' : 'hands'}`;
 
   return (
     <div
@@ -53,7 +90,13 @@ export function PipWindowContent({
         <div className="pip-brand">
           <span
             className={`pip-orb ${
-              isGlowing ? 'pip-orb--glow' : isRunning ? 'pip-orb--live' : ''
+              camBroken
+                ? 'pip-orb--warn'
+                : isGlowing
+                  ? 'pip-orb--glow'
+                  : camActivelyDetecting
+                    ? 'pip-orb--live'
+                    : ''
             }`}
           />
           <span className="pip-title">Still</span>
@@ -61,6 +104,20 @@ export function PipWindowContent({
         <button type="button" className="text-link-btn text-link-btn--muted" onClick={onClosePiP}>
           Return to tab
         </button>
+      </div>
+
+      {/* Explicit live camera & detection confirmation bar */}
+      <div
+        className={`pip-cam-banner ${
+          camBroken
+            ? 'pip-cam-banner--warn'
+            : camActivelyDetecting
+              ? 'pip-cam-banner--live'
+              : ''
+        }`}
+      >
+        <span className="pip-cam-line tabular">{confirmText}</span>
+        <span className="pip-cam-sub">{faceMeta}</span>
       </div>
 
       {stage2AlertOpen ? (
@@ -94,14 +151,21 @@ export function PipWindowContent({
       ) : (
         <div className="pip-calm-body">
           <h2 className="pip-headline">
-            {isGlowing
-              ? 'Noticing hand near zone…'
-              : !isRunning
-                ? 'Paused'
-                : faceState === 'away'
-                  ? 'Waiting quietly'
-                  : 'Hands at ease.'}
+            {camBroken
+              ? 'Detection paused'
+              : isGlowing
+                ? `Hand near zone · ${dwellSec.toFixed(1)}s`
+                : !isRunning
+                  ? 'Paused'
+                  : faceState === 'away'
+                    ? 'Angle camera toward face'
+                    : 'Hands at ease.'}
           </h2>
+
+          <div className="dwell-track">
+            <div className="dwell-fill" style={{ width: `${dwellPct}%` }} />
+          </div>
+
           <div className="pip-metrics">
             <div>
               <span className="pip-metric-label">Calm today</span>
@@ -112,6 +176,7 @@ export function PipWindowContent({
               <span className="pip-metric-val tabular">{urgesRedirected}</span>
             </div>
           </div>
+
           <div className="pip-controls">
             {isRunning ? (
               <button type="button" className="btn btn-subtle btn-sm" onClick={onStop}>

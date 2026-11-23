@@ -24,6 +24,9 @@ export interface PipCanvasState {
   faceState: 'detected' | 'cached' | 'away';
   sideAngle: boolean;
   cameraState: 'live' | 'muted' | 'ended';
+  cameraStalled: boolean;
+  detectCount: number;
+  handsCount: number;
   fps: number;
   dwellSec: number;
   stage2DwellSec: number;
@@ -64,12 +67,13 @@ export function usePictureInPicture(
     const h = canvas.height;
     const isDark = s.theme === 'dark';
     const isRunning = s.status === 'running';
-    const camPausedByOs = isRunning && s.cameraState !== 'live';
+    const camBroken = isRunning && (s.cameraState !== 'live' || s.cameraStalled);
+    const camActivelyDetecting = isRunning && !camBroken && s.detectCount > 0;
     const isAlert = s.stage2AlertOpen;
-    const isStage1 = !camPausedByOs && (s.stage1Glow || s.handInZone);
+    const isStage1 = !camBroken && (s.stage1Glow || s.handInZone);
 
     const t = performance.now() / 1000;
-    const pulse = 0.5 + 0.5 * Math.sin(t * (isAlert ? 3.2 : 2.0));
+    const pulse = 0.5 + 0.5 * Math.sin(t * (isAlert ? 3.2 : 2.2));
 
     ctx.fillStyle = isDark ? '#1A1917' : '#FAF9F5';
     ctx.fillRect(0, 0, w, h);
@@ -101,121 +105,118 @@ export function usePictureInPicture(
     const accent = isDark ? '#D97757' : '#C96442';
     const sage = isDark ? '#7DA388' : '#587B64';
 
-    const orbX = 34;
-    const orbY = 36;
-    const orbColor = camPausedByOs
-      ? accent
-      : isAlert || isStage1
-        ? '#E8964A'
-        : isRunning && s.faceState !== 'away'
-          ? sage
-          : inkMuted;
-
-    if (isAlert || isStage1 || (isRunning && !camPausedByOs)) {
-      ctx.save();
-      ctx.beginPath();
-      ctx.arc(orbX, orbY, isAlert ? 16 + 4 * pulse : 11, 0, Math.PI * 2);
-      ctx.fillStyle =
-        isAlert || isStage1
-          ? 'rgba(232, 150, 74, 0.32)'
-          : 'rgba(88, 123, 100, 0.2)';
-      ctx.fill();
-      ctx.restore();
-    }
-
-    ctx.beginPath();
-    ctx.arc(orbX, orbY, 6, 0, Math.PI * 2);
-    ctx.fillStyle = orbColor;
-    ctx.fill();
-
+    // Top row: Brand + Face/Hands status
     ctx.font = '500 20px Georgia, serif';
     ctx.fillStyle = ink;
-    ctx.fillText('Still', 52, 43);
+    ctx.fillText('Still', 28, 38);
 
-    // Real live diagnostic badge in top-right (never hardcoded!)
-    const rightBadge = !isRunning
-      ? 'Paused'
-      : camPausedByOs
-        ? 'Camera paused by OS'
-        : `${s.fps.toFixed(1)} FPS · ${
-            s.faceState === 'away'
-              ? 'No face'
-              : s.faceState === 'cached'
-                ? 'Cached'
-                : s.sideAngle
-                  ? 'Side angle'
-                  : 'Face locked'
-          }`;
+    const faceLabel = !isRunning
+      ? 'Session paused'
+      : camBroken
+        ? 'Camera stopped'
+        : s.faceState === 'away'
+          ? 'No face in frame'
+          : s.faceState === 'cached'
+            ? `Cached · ${s.handsCount}h`
+            : `${s.sideAngle ? 'Side angle' : 'Face locked'} · ${s.handsCount} ${s.handsCount === 1 ? 'hand' : 'hands'}`;
 
     ctx.font = '500 13px -apple-system, BlinkMacSystemFont, sans-serif';
-    ctx.fillStyle = camPausedByOs ? accent : inkMuted;
+    ctx.fillStyle = camBroken ? accent : inkMuted;
     ctx.textAlign = 'right';
-    ctx.fillText(rightBadge, w - 28, 41);
+    ctx.fillText(faceLabel, w - 28, 36);
     ctx.textAlign = 'left';
 
-    const title = camPausedByOs
-      ? 'Camera paused by iPadOS'
+    // Explicit Camera + Live Detection Confirmation Pill (shows ticking frame counter #)
+    const pillX = 28;
+    const pillY = 50;
+    const pillW = w - 56;
+    const pillH = 30;
+    ctx.fillStyle = camBroken
+      ? isDark
+        ? 'rgba(217,119,87,0.18)'
+        : 'rgba(201,100,66,0.12)'
+      : camActivelyDetecting
+        ? isDark
+          ? 'rgba(125,163,136,0.18)'
+          : 'rgba(88,123,100,0.12)'
+        : isDark
+          ? 'rgba(242,239,232,0.06)'
+          : 'rgba(31,30,28,0.05)';
+    ctx.beginPath();
+    ctx.roundRect(pillX, pillY, pillW, pillH, 8);
+    ctx.fill();
+
+    // Pulsing live camera indicator dot inside the confirmation pill
+    const dotX = pillX + 15;
+    const dotY = pillY + pillH / 2;
+    ctx.beginPath();
+    ctx.arc(dotX, dotY, camActivelyDetecting ? 4.5 + 1.2 * pulse : 4.5, 0, Math.PI * 2);
+    ctx.fillStyle = camBroken ? accent : camActivelyDetecting ? sage : inkMuted;
+    ctx.fill();
+
+    const confirmLine = !isRunning
+      ? 'Camera off · Tap Begin session to watch'
+      : camBroken
+        ? 'Camera paused by browser · Return or use Split View'
+        : camActivelyDetecting
+          ? `Camera in use · Detecting live (${s.fps.toFixed(1)} FPS · #${s.detectCount})`
+          : 'Camera starting · Waiting for first frame…';
+
+    ctx.font = '500 13px -apple-system, BlinkMacSystemFont, sans-serif';
+    ctx.fillStyle = camBroken ? accent : camActivelyDetecting ? sage : inkMuted;
+    ctx.fillText(confirmLine, pillX + 28, pillY + 20);
+
+    // Main headline
+    const title = camBroken
+      ? 'Detection paused'
       : isAlert
         ? 'Gentle pause — hands down.'
         : isStage1
-          ? 'Hand near zone…'
+          ? `Hand near zone · ${s.dwellSec.toFixed(1)}s`
           : !isRunning
-            ? 'Session paused'
+            ? 'Paused'
             : s.faceState === 'away'
-              ? 'Face not in camera view'
+              ? 'Angle iPad toward your face'
               : 'Hands at ease';
 
-    ctx.font = '400 28px Georgia, serif';
-    ctx.fillStyle = camPausedByOs || isAlert ? accent : ink;
-    ctx.fillText(title, 28, 114);
+    ctx.font = '400 26px Georgia, serif';
+    ctx.fillStyle = camBroken || isAlert ? accent : ink;
+    ctx.fillText(title, 28, 126);
 
-    const sub = camPausedByOs
-      ? 'Keep Safari in Split View / Slide Over for live camera'
-      : isAlert
-        ? 'Rest palms flat for 60s · tap Still to respond'
-        : isStage1
-          ? `Dwell ${s.dwellSec.toFixed(1)}s · lower hand to auto-catch`
-          : !isRunning
-            ? 'Tap Begin session in Still to watch'
-            : s.faceState === 'away'
-              ? 'Angle your iPad slightly closer toward your face'
-              : s.sideAngle
-                ? 'Side-angle boost active · watching gently'
-                : 'Watching locally in Picture-in-Picture';
-
-    ctx.font = '400 14.5px -apple-system, BlinkMacSystemFont, sans-serif';
-    ctx.fillStyle = inkMuted;
-    ctx.fillText(sub, 28, 146);
-
-    // Live dwell progress bar right on the PiP card
+    // Live dwell progress bar
     const barX = 28;
-    const barY = 166;
+    const barY = 144;
     const barW = w - 56;
-    const barH = 6;
+    const barH = 7;
     const dwellPct = Math.min(1, s.dwellSec / Math.max(0.5, s.stage2DwellSec));
     ctx.fillStyle = isDark ? 'rgba(242,239,232,0.1)' : 'rgba(31,30,28,0.08)';
-    ctx.fillRect(barX, barY, barW, barH);
+    ctx.beginPath();
+    ctx.roundRect(barX, barY, barW, barH, 4);
+    ctx.fill();
     if (dwellPct > 0.01) {
       ctx.fillStyle = accent;
-      ctx.fillRect(barX, barY, Math.round(barW * dwellPct), barH);
+      ctx.beginPath();
+      ctx.roundRect(barX, barY, Math.max(8, Math.round(barW * dwellPct)), barH, 4);
+      ctx.fill();
     }
 
+    // Bottom hairline & calm summary
     ctx.strokeStyle = isDark ? 'rgba(242,239,232,0.12)' : 'rgba(31,30,28,0.1)';
     ctx.lineWidth = 1;
     ctx.beginPath();
-    ctx.moveTo(28, h - 72);
-    ctx.lineTo(w - 28, h - 72);
+    ctx.moveTo(28, h - 76);
+    ctx.lineTo(w - 28, h - 76);
     ctx.stroke();
 
     ctx.font = '500 12px -apple-system, BlinkMacSystemFont, sans-serif';
     ctx.fillStyle = inkMuted;
-    ctx.fillText('CALM TODAY', 28, h - 46);
-    ctx.fillText('REDIRECTED', 210, h - 46);
+    ctx.fillText('CALM TODAY', 28, h - 50);
+    ctx.fillText('REDIRECTED', 210, h - 50);
 
     ctx.font = '400 24px Georgia, serif';
     ctx.fillStyle = ink;
-    ctx.fillText(formatDuration(s.calmSeconds), 28, h - 18);
-    ctx.fillText(String(s.urgesRedirected), 210, h - 18);
+    ctx.fillText(formatDuration(s.calmSeconds), 28, h - 20);
+    ctx.fillText(String(s.urgesRedirected), 210, h - 20);
   }, []);
 
   /**
@@ -446,20 +447,27 @@ export function usePictureInPicture(
     // 2. Safari / iPadOS: Synchronous Video PiP on pre-warmed Canvas stream
     const pipVideo = pipVideoRef.current as WebKitVideoElement | null;
     if (pipVideo) {
-      // Ensure frame is freshly drawn & playback started WITHOUT awaiting before PiP call!
       primeCanvasVideo();
 
       if (pipVideo.readyState >= 1) {
         const res = await tryEnterVideoPiPSync(pipVideo);
         if (res.ok) {
           setPipKind('video');
+          // Safari often pauses other <video> elements when one enters PiP — immediately resume camera!
+          const nudgeCamera = () => {
+            const cam = cameraVideoRef?.current;
+            if (cam && cam.paused && cam.srcObject) {
+              cam.play().catch(() => {});
+            }
+          };
+          window.setTimeout(nudgeCamera, 60);
+          window.setTimeout(nudgeCamera, 300);
           return;
         }
       }
     }
 
     // 3. Fallback for iPadOS builds that disallow canvas.captureStream PiP:
-    //    Enter PiP directly on the live front-camera <video> element if a session is running!
     const camVideo = cameraVideoRef?.current as WebKitVideoElement | null;
     if (camVideo && camVideo.readyState >= 1 && camVideo.srcObject) {
       const camRes = await tryEnterVideoPiPSync(camVideo);
@@ -469,8 +477,7 @@ export function usePictureInPicture(
       }
     }
 
-    // 4. If canvas video was cold (readyState === 0 on first tap), wait briefly for metadata
-    //    and prompt a second tap so Safari gets a fresh synchronous gesture with readyState >= 2.
+    // 4. If canvas video was cold (readyState === 0 on first tap), prompt second tap
     if (pipVideo && pipVideo.readyState === 0) {
       primeCanvasVideo();
       setPipError(
@@ -479,7 +486,6 @@ export function usePictureInPicture(
       return;
     }
 
-    // 5. Final clear diagnostic message tailored to iPadOS Chrome vs Safari
     const ua = navigator.userAgent;
     const isCriOS = /CriOS/i.test(ua);
     if (isCriOS) {
@@ -512,6 +518,7 @@ export function usePictureInPicture(
   return {
     pipKind,
     pipActive: pipKind !== 'none',
+    pipWindow,
     pipContainer,
     pipError,
     isSupported,
