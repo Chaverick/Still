@@ -157,6 +157,11 @@ export function App() {
       stage1Glow: session.edgeGlowActive,
       stage2AlertOpen: pauseSheetState.open,
       faceState: session.diagnostics.faceState,
+      sideAngle: session.diagnostics.sideAngle,
+      cameraState: session.diagnostics.cameraState,
+      fps: session.diagnostics.fps,
+      dwellSec: session.dwellSec,
+      stage2DwellSec: settings.stage2DwellSec,
     },
     session.videoRef
   );

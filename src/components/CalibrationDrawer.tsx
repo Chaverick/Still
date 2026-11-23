@@ -286,11 +286,13 @@ export function CalibrationDrawer({
             <span className="preview-status-pill">
               {!sessionRunning
                 ? 'Start session to calibrate'
-                : diagnostics.faceState === 'detected'
-                  ? `Face locked · ${diagnostics.handsCount} ${diagnostics.handsCount === 1 ? 'hand' : 'hands'}`
-                  : diagnostics.faceState === 'cached'
-                    ? 'Occlusion cache active (1.5s)'
-                    : 'Face out of frame'}
+                : diagnostics.cameraState !== 'live'
+                  ? 'Camera paused by OS'
+                  : diagnostics.faceState === 'detected'
+                    ? `${diagnostics.sideAngle ? 'Side angle · boosted' : 'Face locked'} · ${diagnostics.handsCount} ${diagnostics.handsCount === 1 ? 'hand' : 'hands'}`
+                    : diagnostics.faceState === 'cached'
+                      ? 'Occlusion cache active (up to 5s)'
+                      : 'Face out of frame'}
             </span>
           </div>
 

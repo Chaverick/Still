@@ -13,7 +13,10 @@ import type {
 } from '../types';
 
 const OCCLUSION_CACHE_MS = 1500;
-const BASE_HALO_RATIO = 0.24; // fraction of outer-eye-to-outer-eye span at zoneScale = 1.0
+// When a hand is actively visible in frame (e.g. side-angle iPad where the raising hand blocks the face),
+// hold the cached eyebrow zone up to 5s so Stage 2 (2.6s) still fires cleanly!
+const OCCLUSION_CACHE_WITH_HAND_MS = 5000;
+const BASE_HALO_RATIO = 0.25; // fraction of yaw-invariant face scale at zoneScale = 1.0
 const PINCH_RATIO_THRESHOLD = 0.62; // thumb-to-index/middle distance relative to palm size
 
 // Standard MediaPipe 468-point Face Mesh landmark indices
@@ -31,12 +34,14 @@ const LEFT_EYE_IDX = [362, 385, 387, 263, 373, 380];
 // Upper forehead perimeter arc used to project the hairline/scalp zone
 const FOREHEAD_ARC_IDX = [21, 54, 103, 67, 109, 10, 338, 297, 332, 284, 251];
 
-// Outer eye corners for stable distance normalization (invariant to blinking)
+// Outer eye corners + vertical forehead-to-chin anchors (vertical height is invariant to side-angle yaw!)
 const OUTER_EYE_LEFT_IMG = 33;
 const OUTER_EYE_RIGHT_IMG = 263;
+const FOREHEAD_TOP = 10;
+const CHIN_BOTTOM = 152;
 
-// Thumb, index, middle, ring tips + upper joints for pinch angle robustness
-const TRACKED_HAND_INDICES = [4, 8, 12, 16, 7, 3];
+// Thumb, index, middle, ring tips + upper/mid finger joints for side-angle & curled-finger robustness
+const TRACKED_HAND_INDICES = [4, 8, 12, 16, 7, 6, 3, 11];
 
 interface CachedFace {
   timestamp: number;
@@ -46,7 +51,8 @@ interface CachedFace {
   leftEye: Point2D[];
   rightEye: Point2D[];
   hairline: Point2D[];
-  eyeSpan: number;
+  eyeSpan: number; // yaw-invariant face scale
+  sideAngle: boolean;
 }
 
 export interface DetectOptions {
@@ -180,7 +186,8 @@ export class LocalVisionEngine {
     const vision = await FilesetResolver.forVisionTasks(wasmRoot);
 
     const tryDelegate = async (delegate: 'GPU' | 'CPU'): Promise<void> => {
-      // Create sequentially so iPadOS Safari WebGL context initializes cleanly
+      // Slightly more permissive thresholds (0.30 face / 0.25 hand) so 3/4 side-angle setups
+      // (like an iPad placed to the right of your laptop) stay locked reliably.
       const face = await FaceLandmarker.createFromOptions(vision, {
         baseOptions: {
           modelAssetPath: faceModelUrl,
@@ -188,9 +195,9 @@ export class LocalVisionEngine {
         },
         runningMode: 'VIDEO',
         numFaces: 1,
-        minFaceDetectionConfidence: 0.45,
-        minFacePresenceConfidence: 0.45,
-        minTrackingConfidence: 0.45,
+        minFaceDetectionConfidence: 0.3,
+        minFacePresenceConfidence: 0.3,
+        minTrackingConfidence: 0.3,
         outputFaceBlendshapes: false,
         outputFacialTransformationMatrixes: false,
       });
@@ -203,9 +210,9 @@ export class LocalVisionEngine {
           },
           runningMode: 'VIDEO',
           numHands: 2,
-          minHandDetectionConfidence: 0.4,
-          minHandPresenceConfidence: 0.4,
-          minTrackingConfidence: 0.4,
+          minHandDetectionConfidence: 0.25,
+          minHandPresenceConfidence: 0.25,
+          minTrackingConfidence: 0.25,
         });
 
         this.faceLandmarker = face;
@@ -265,6 +272,7 @@ export class LocalVisionEngine {
       return null;
     }
 
+    const hands = handResult.landmarks ?? [];
     const faceLandmarks = faceResult.faceLandmarks?.[0];
     let usingOcclusionCache = false;
     let activeFace: CachedFace | null = null;
@@ -272,11 +280,20 @@ export class LocalVisionEngine {
     if (faceLandmarks && faceLandmarks.length > 380) {
       const leftOuter = faceLandmarks[OUTER_EYE_LEFT_IMG];
       const rightOuter = faceLandmarks[OUTER_EYE_RIGHT_IMG];
-      const eyeSpan = Math.max(0.05, distIso(leftOuter, rightOuter, aspect));
+      const foreheadTop = faceLandmarks[FOREHEAD_TOP];
+      const chinBottom = faceLandmarks[CHIN_BOTTOM];
 
-      // Project hairline slightly above upper forehead oval landmarks
+      const rawEyeSpan = distIso(leftOuter, rightOuter, aspect);
+      const faceHeight = distIso(foreheadTop, chinBottom, aspect);
+      // Front-on: rawEyeSpan ≈ 0.68 * faceHeight.
+      // At a 40°–60° side angle (e.g. iPad to your right), rawEyeSpan foreshortens by cos(yaw),
+      // while vertical faceHeight stays full-scale! Taking max prevents the brow halo from shrinking.
+      const heightEquivSpan = faceHeight * 0.68;
+      const robustScale = Math.max(0.05, rawEyeSpan, heightEquivSpan);
+      const sideAngle = heightEquivSpan > 0.04 && rawEyeSpan / heightEquivSpan < 0.82;
+
       const forehead = pickPoints(faceLandmarks, FOREHEAD_ARC_IDX);
-      const liftY = eyeSpan * 0.16;
+      const liftY = robustScale * 0.16;
       const hairline = forehead.map((p) => ({
         x: p.x,
         y: Math.max(0.01, p.y - liftY),
@@ -290,18 +307,28 @@ export class LocalVisionEngine {
         leftEye: pickPoints(faceLandmarks, LEFT_EYE_IDX),
         rightEye: pickPoints(faceLandmarks, RIGHT_EYE_IDX),
         hairline,
-        eyeSpan,
+        eyeSpan: robustScale,
+        sideAngle,
       };
       this.cachedFace = activeFace;
-    } else if (this.cachedFace && nowMs - this.cachedFace.timestamp <= OCCLUSION_CACHE_MS) {
-      activeFace = this.cachedFace;
-      usingOcclusionCache = true;
-    } else {
-      this.cachedFace = null;
+    } else if (this.cachedFace) {
+      // If a hand is currently visible in frame (blocking the face at a side angle),
+      // hold the occlusion cache up to 5s so Stage 2 dwell completes reliably;
+      // otherwise expire after 1.5s when stepping away.
+      const maxCacheMs =
+        hands.length > 0 ? OCCLUSION_CACHE_WITH_HAND_MS : OCCLUSION_CACHE_MS;
+      if (nowMs - this.cachedFace.timestamp <= maxCacheMs) {
+        activeFace = this.cachedFace;
+        usingOcclusionCache = true;
+      } else {
+        this.cachedFace = null;
+      }
     }
 
+    // Give a gentle +15% halo boost automatically when sitting at a noticeable side angle
+    const sideBoost = activeFace?.sideAngle ? 1.15 : 1.0;
     const haloRadius = activeFace
-      ? activeFace.eyeSpan * BASE_HALO_RATIO * options.zoneScale
+      ? activeFace.eyeSpan * BASE_HALO_RATIO * options.zoneScale * sideBoost
       : 0;
 
     // Build active zone polylines according to user's selected presets
@@ -358,7 +385,6 @@ export class LocalVisionEngine {
     let handInZone = false;
     let closestRatio: number | null = null;
 
-    const hands = handResult.landmarks ?? [];
     for (let h = 0; h < hands.length; h++) {
       const hand = hands[h];
       const pinching = isHandPinching(hand, aspect);
@@ -400,6 +426,7 @@ export class LocalVisionEngine {
       videoHeight: video.videoHeight,
       facePresent: activeFace !== null,
       usingOcclusionCache,
+      sideAngle: Boolean(activeFace?.sideAngle),
       faceOval: activeFace?.faceOval ?? [],
       leftEye: activeFace?.leftEye ?? [],
       rightEye: activeFace?.rightEye ?? [],

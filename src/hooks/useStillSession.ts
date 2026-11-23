@@ -1,5 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { playSingingBowl, unlockAudio } from '../lib/audio';
+import {
+  playSingingBowl,
+  startSilentKeepAlive,
+  stopSilentKeepAlive,
+  unlockAudio,
+} from '../lib/audio';
 import { checkModelsCached, LocalVisionEngine } from '../lib/vision';
 import { WakeLockController } from '../lib/wakeLock';
 import type {
@@ -12,6 +17,7 @@ import type {
 } from '../types';
 
 const TARGET_INTERVAL_MS = 250; // 4 FPS loop
+const HAND_FLICKER_HOLD_MS = 380; // tolerate a brief 1-frame side-angle drop without losing dwell
 const STAGE1_AUTOCATCH_MS = 5000; // 5s auto-catch window after hand lowers
 const AWAY_PAUSE_CALM_MS = 30_000; // stop ticking calm time after 30s without face
 const WELCOME_BACK_THRESHOLD_MS = 5 * 60 * 1000; // 5 minutes stepped away / walk
@@ -69,6 +75,8 @@ export function useStillSession({
     delegate: null,
     fps: 0,
     faceState: 'away',
+    sideAngle: false,
+    cameraState: 'ended',
     handsCount: 0,
     modelsCached: false,
     wakeLockActive: false,
@@ -78,6 +86,7 @@ export function useStillSession({
   const runningRef = useRef(false);
   const rafRef = useRef<number | null>(null);
   const lastDetectMsRef = useRef(0);
+  const lastHandInZoneMsRef = useRef(0);
   const dwellRef = useRef(0);
   const stage1FiredRef = useRef(false);
   const stage1StartedAtRef = useRef(0);
@@ -175,6 +184,7 @@ export function useStillSession({
     engineRef.current?.resetCache();
     void wakeLockRef.current?.disable();
     resetDwellState();
+    stopSilentKeepAlive();
     setFrameGeometry(null);
     setStatus('idle');
     setErrorMessage(null);
@@ -182,6 +192,8 @@ export function useStillSession({
       ...d,
       fps: 0,
       faceState: 'away',
+      sideAngle: false,
+      cameraState: 'ended',
       handsCount: 0,
     }));
   }, [resetDwellState, stopCameraTracks]);
@@ -194,8 +206,25 @@ export function useStillSession({
 
     if (now - lastDetectMsRef.current >= TARGET_INTERVAL_MS) {
       const prevDetect = lastDetectMsRef.current || now - TARGET_INTERVAL_MS;
-      const dt = Math.min(Math.max((now - prevDetect) / 1000, 0.05), 0.6);
+      // Allow up to 1.2s dt so even if background Safari briefly slows to ~1 FPS, dwell stays accurate
+      const dt = Math.min(Math.max((now - prevDetect) / 1000, 0.05), 1.2);
       lastDetectMsRef.current = now;
+
+      const track = streamRef.current?.getVideoTracks()[0];
+      const liveCamState: 'live' | 'muted' | 'ended' = !track || track.readyState !== 'live'
+        ? 'ended'
+        : track.muted
+          ? 'muted'
+          : 'live';
+
+      if (liveCamState !== 'live') {
+        setDiagnostics((d) => ({
+          ...d,
+          fps: 0,
+          cameraState: liveCamState,
+        }));
+        return;
+      }
 
       const video = videoRef.current;
       const engine = engineRef.current;
@@ -240,6 +269,8 @@ export function useStillSession({
             delegate: engine.activeDelegate,
             fps: Math.round(measuredFps * 10) / 10,
             faceState,
+            sideAngle: frame.sideAngle,
+            cameraState: 'live',
             handsCount,
           }));
 
@@ -265,6 +296,7 @@ export function useStillSession({
           // Two-stage gentle alerting logic (paused while PauseSheet or WelcomeBack is open)
           if (!pauseSheetOpenRef.current && !welcomeBackRef.current) {
             if (frame.handInZone) {
+              lastHandInZoneMsRef.current = now;
               const nextDwell = Math.min(s.stage2DwellSec + 1.5, dwellRef.current + dt);
               dwellRef.current = nextDwell;
               setDwellSec(nextDwell);
@@ -312,27 +344,26 @@ export function useStillSession({
                 onStage2TriggeredRef.current();
               }
             } else {
-              // Hand cleared eyebrow zone
-              if (dwellRef.current > 0) {
-                const nextDwell = Math.max(0, dwellRef.current - dt * 1.6);
+              // Brief 380ms flicker hold so a single missed side-angle hand frame never resets dwell
+              const sinceInZone = now - lastHandInZoneMsRef.current;
+              if (dwellRef.current > 0 && sinceInZone >= HAND_FLICKER_HOLD_MS) {
+                const nextDwell = Math.max(0, dwellRef.current - dt * 1.1);
                 dwellRef.current = nextDwell;
                 setDwellSec(nextDwell);
               }
 
-              if (stage1FiredRef.current) {
+              if (stage1FiredRef.current && sinceInZone >= HAND_FLICKER_HOLD_MS) {
                 if (stage1ClearedAtRef.current === null) {
                   stage1ClearedAtRef.current = wallNow;
                 }
                 const elapsedClearMs = wallNow - stage1ClearedAtRef.current;
 
-                // Soften edge glow promptly ~1s after hand lowers for positive reinforcement
                 if (elapsedClearMs >= 1000) {
                   setEdgeGlowActive(false);
                 }
 
                 const remainingMs = Math.max(0, STAGE1_AUTOCATCH_MS - elapsedClearMs);
                 if (remainingMs <= 0) {
-                  // 5s Auto-Catch complete!
                   stage1FiredRef.current = false;
                   stage1ClearedAtRef.current = null;
                   dwellRef.current = 0;
@@ -354,7 +385,6 @@ export function useStillSession({
         }
       }
     }
-
   }, [showWhisper]);
 
   const runLoop = useCallback(() => {
@@ -363,16 +393,22 @@ export function useStillSession({
     rafRef.current = requestAnimationFrame(runLoop);
   }, [stepDetection]);
 
-  // PiP background heartbeat: when main tab is hidden behind another app while PiP floats,
-  // requestAnimationFrame pauses, so this lightweight 250ms interval keeps 4 FPS running smoothly.
+  // PiP background heartbeat + silent Web Audio clock so Safari doesn't throttle 4 FPS timers
   useEffect(() => {
-    if (status !== 'running' || !pipActive) return;
+    if (status !== 'running' || !pipActive) {
+      stopSilentKeepAlive();
+      return;
+    }
+    startSilentKeepAlive();
     const id = window.setInterval(() => {
       if (document.visibilityState === 'hidden' || pipActiveRef.current) {
         stepDetection();
       }
     }, TARGET_INTERVAL_MS);
-    return () => window.clearInterval(id);
+    return () => {
+      window.clearInterval(id);
+      stopSilentKeepAlive();
+    };
   }, [status, pipActive, stepDetection]);
 
   /**
@@ -421,6 +457,19 @@ export function useStillSession({
     }
 
     streamRef.current = stream;
+    const videoTrack = stream.getVideoTracks()[0];
+    if (videoTrack) {
+      setDiagnostics((d) => ({ ...d, cameraState: videoTrack.muted ? 'muted' : 'live' }));
+      videoTrack.onmute = () => {
+        setDiagnostics((d) => ({ ...d, cameraState: 'muted', fps: 0 }));
+      };
+      videoTrack.onunmute = () => {
+        setDiagnostics((d) => ({ ...d, cameraState: 'live' }));
+      };
+      videoTrack.onended = () => {
+        setDiagnostics((d) => ({ ...d, cameraState: 'ended', fps: 0 }));
+      };
+    }
 
     const video = videoRef.current;
     if (video) {

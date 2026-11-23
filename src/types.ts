@@ -78,11 +78,12 @@ export interface FrameGeometry {
   videoHeight: number;
   facePresent: boolean;
   usingOcclusionCache: boolean;
+  sideAngle: boolean;
   faceOval: Point2D[];
   leftEye: Point2D[];
   rightEye: Point2D[];
   activeZones: ZoneGeometry[];
-  eyeSpan: number; // aspect-corrected isotropic span
+  eyeSpan: number; // yaw-invariant normalized face scale
   haloRadius: number; // primary brow isotropic radius
   fingertips: Array<Point2D & { inZone: boolean; handIndex: number; pinching: boolean }>;
   handInZone: boolean;
@@ -100,6 +101,8 @@ export interface VisionDiagnostics {
   delegate: DelegateMode;
   fps: number;
   faceState: 'detected' | 'cached' | 'away';
+  sideAngle: boolean;
+  cameraState: 'live' | 'muted' | 'ended';
   handsCount: number;
   modelsCached: boolean;
   wakeLockActive: boolean;

@@ -22,6 +22,11 @@ export interface PipCanvasState {
   stage1Glow: boolean;
   stage2AlertOpen: boolean;
   faceState: 'detected' | 'cached' | 'away';
+  sideAngle: boolean;
+  cameraState: 'live' | 'muted' | 'ended';
+  fps: number;
+  dwellSec: number;
+  stage2DwellSec: number;
 }
 
 export function usePictureInPicture(
@@ -58,8 +63,10 @@ export function usePictureInPicture(
     const w = canvas.width;
     const h = canvas.height;
     const isDark = s.theme === 'dark';
+    const isRunning = s.status === 'running';
+    const camPausedByOs = isRunning && s.cameraState !== 'live';
     const isAlert = s.stage2AlertOpen;
-    const isStage1 = s.stage1Glow || s.handInZone;
+    const isStage1 = !camPausedByOs && (s.stage1Glow || s.handInZone);
 
     const t = performance.now() / 1000;
     const pulse = 0.5 + 0.5 * Math.sin(t * (isAlert ? 3.2 : 2.0));
@@ -96,10 +103,15 @@ export function usePictureInPicture(
 
     const orbX = 34;
     const orbY = 36;
-    const orbColor =
-      isAlert || isStage1 ? '#E8964A' : s.status === 'running' ? sage : inkMuted;
+    const orbColor = camPausedByOs
+      ? accent
+      : isAlert || isStage1
+        ? '#E8964A'
+        : isRunning && s.faceState !== 'away'
+          ? sage
+          : inkMuted;
 
-    if (isAlert || isStage1 || s.status === 'running') {
+    if (isAlert || isStage1 || (isRunning && !camPausedByOs)) {
       ctx.save();
       ctx.beginPath();
       ctx.arc(orbX, orbY, isAlert ? 16 + 4 * pulse : 11, 0, Math.PI * 2);
@@ -120,37 +132,73 @@ export function usePictureInPicture(
     ctx.fillStyle = ink;
     ctx.fillText('Still', 52, 43);
 
+    // Real live diagnostic badge in top-right (never hardcoded!)
+    const rightBadge = !isRunning
+      ? 'Paused'
+      : camPausedByOs
+        ? 'Camera paused by OS'
+        : `${s.fps.toFixed(1)} FPS · ${
+            s.faceState === 'away'
+              ? 'No face'
+              : s.faceState === 'cached'
+                ? 'Cached'
+                : s.sideAngle
+                  ? 'Side angle'
+                  : 'Face locked'
+          }`;
+
     ctx.font = '500 13px -apple-system, BlinkMacSystemFont, sans-serif';
-    ctx.fillStyle = inkMuted;
+    ctx.fillStyle = camPausedByOs ? accent : inkMuted;
     ctx.textAlign = 'right';
-    ctx.fillText(s.status === 'running' ? 'Local · 4 FPS' : 'Paused', w - 28, 41);
+    ctx.fillText(rightBadge, w - 28, 41);
     ctx.textAlign = 'left';
 
-    const title = isAlert
-      ? 'Gentle pause — hands down.'
-      : isStage1
-        ? 'Hand near zone…'
-        : s.status !== 'running'
-          ? 'Session paused'
-          : s.faceState === 'away'
-            ? 'Waiting quietly'
-            : 'Hands at ease';
+    const title = camPausedByOs
+      ? 'Camera paused by iPadOS'
+      : isAlert
+        ? 'Gentle pause — hands down.'
+        : isStage1
+          ? 'Hand near zone…'
+          : !isRunning
+            ? 'Session paused'
+            : s.faceState === 'away'
+              ? 'Face not in camera view'
+              : 'Hands at ease';
 
-    ctx.font = '400 30px Georgia, serif';
-    ctx.fillStyle = isAlert ? accent : ink;
-    ctx.fillText(title, 28, 122);
+    ctx.font = '400 28px Georgia, serif';
+    ctx.fillStyle = camPausedByOs || isAlert ? accent : ink;
+    ctx.fillText(title, 28, 114);
 
-    const sub = isAlert
-      ? 'Rest palms flat for 60s · return to respond'
-      : isStage1
-        ? 'Lower hand gently to auto-catch'
-        : s.status === 'running'
-          ? 'Watching locally in Picture-in-Picture'
-          : 'Tap Begin session in Still to watch';
+    const sub = camPausedByOs
+      ? 'Keep Safari in Split View / Slide Over for live camera'
+      : isAlert
+        ? 'Rest palms flat for 60s · tap Still to respond'
+        : isStage1
+          ? `Dwell ${s.dwellSec.toFixed(1)}s · lower hand to auto-catch`
+          : !isRunning
+            ? 'Tap Begin session in Still to watch'
+            : s.faceState === 'away'
+              ? 'Angle your iPad slightly closer toward your face'
+              : s.sideAngle
+                ? 'Side-angle boost active · watching gently'
+                : 'Watching locally in Picture-in-Picture';
 
-    ctx.font = '400 15px -apple-system, BlinkMacSystemFont, sans-serif';
+    ctx.font = '400 14.5px -apple-system, BlinkMacSystemFont, sans-serif';
     ctx.fillStyle = inkMuted;
-    ctx.fillText(sub, 28, 154);
+    ctx.fillText(sub, 28, 146);
+
+    // Live dwell progress bar right on the PiP card
+    const barX = 28;
+    const barY = 166;
+    const barW = w - 56;
+    const barH = 6;
+    const dwellPct = Math.min(1, s.dwellSec / Math.max(0.5, s.stage2DwellSec));
+    ctx.fillStyle = isDark ? 'rgba(242,239,232,0.1)' : 'rgba(31,30,28,0.08)';
+    ctx.fillRect(barX, barY, barW, barH);
+    if (dwellPct > 0.01) {
+      ctx.fillStyle = accent;
+      ctx.fillRect(barX, barY, Math.round(barW * dwellPct), barH);
+    }
 
     ctx.strokeStyle = isDark ? 'rgba(242,239,232,0.12)' : 'rgba(31,30,28,0.1)';
     ctx.lineWidth = 1;

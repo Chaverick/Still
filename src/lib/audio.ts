@@ -98,3 +98,53 @@ export function playSingingBowl(
     osc.stop(now + p.decay + 0.1);
   }
 }
+
+let keepAliveOsc: OscillatorNode | null = null;
+let keepAliveGain: GainNode | null = null;
+
+/**
+ * Inaudible Web Audio heartbeat used ONLY while Picture-in-Picture is active
+ * so Safari does not throttle background 4 FPS detection timers.
+ */
+export function startSilentKeepAlive(): void {
+  const ctx = getAudioContext();
+  if (!ctx || keepAliveOsc) return;
+  if (ctx.state === 'suspended') {
+    ctx.resume().catch(() => {});
+  }
+  try {
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.value = 20;
+    gain.gain.value = 0.00001; // completely inaudible
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start();
+    keepAliveOsc = osc;
+    keepAliveGain = gain;
+  } catch {
+    // ignore
+  }
+}
+
+export function stopSilentKeepAlive(): void {
+  if (keepAliveOsc) {
+    try {
+      keepAliveOsc.stop();
+      keepAliveOsc.disconnect();
+    } catch {
+      // ignore
+    }
+    keepAliveOsc = null;
+  }
+  if (keepAliveGain) {
+    try {
+      keepAliveGain.disconnect();
+    } catch {
+      // ignore
+    }
+    keepAliveGain = null;
+  }
+}
+
