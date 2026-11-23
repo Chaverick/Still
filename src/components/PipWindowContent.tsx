@@ -20,6 +20,7 @@ interface PipWindowContentProps {
   pinnedResponses: string[];
   onStart: () => void;
   onStop: () => void;
+  onTestCue: () => void;
   onAutoCatch: (responseId: string) => void;
   onGraceRecovery: () => void;
   onFalseAlarm: () => void;
@@ -48,6 +49,7 @@ export function PipWindowContent({
   pinnedResponses,
   onStart,
   onStop,
+  onTestCue,
   onAutoCatch,
   onGraceRecovery,
   onFalseAlarm,
@@ -180,13 +182,16 @@ export function PipWindowContent({
           <div className="pip-controls">
             {isRunning ? (
               <button type="button" className="btn btn-subtle btn-sm" onClick={onStop}>
-                Pause watching
+                Pause
               </button>
             ) : (
               <button type="button" className="btn btn-primary btn-sm" onClick={onStart}>
                 Begin session
               </button>
             )}
+            <button type="button" className="btn btn-ghost btn-sm" onClick={onTestCue}>
+              Test chime
+            </button>
           </div>
         </div>
       )}

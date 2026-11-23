@@ -538,6 +538,7 @@ export function App() {
               void session.startSession();
             }}
             onStop={session.stopSession}
+            onTestCue={session.triggerTestCue}
             onAutoCatch={handlePauseAutoCatch}
             onGraceRecovery={() => handlePauseGraceRecovery()}
             onFalseAlarm={handlePauseFalseAlarm}

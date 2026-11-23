@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { getPipAudioTrack, setVideoPiPAudioActive } from '../lib/audio';
 import { formatDuration } from '../lib/storage';
 import type { EngineStatus, PiPKind, ThemeMode } from '../types';
 
@@ -217,12 +218,21 @@ export function usePictureInPicture(
     ctx.fillStyle = ink;
     ctx.fillText(formatDuration(s.calmSeconds), 28, h - 20);
     ctx.fillText(String(s.urgesRedirected), 210, h - 20);
+
+    // Flush newly painted frame into the MediaStream immediately (eliminates delayed orange blip!)
+    const vTrack = streamRef.current?.getVideoTracks()[0] as
+      | (MediaStreamTrack & { requestFrame?: () => void })
+      | undefined;
+    try {
+      vTrack?.requestFrame?.();
+    } catch {
+      // ignore
+    }
   }, []);
 
   /**
-   * Pre-warm the Canvas -> MediaStream -> <video> pipeline BEFORE the user taps "Float PiP"
-   * so iPadOS / macOS Safari already has readyState >= 2 and can enter PiP SYNCHRONOUSLY
-   * inside the tap gesture without losing Safari's user-activation token.
+   * Pre-warm the Canvas -> MediaStream (+ audio track) -> <video> pipeline BEFORE "Float PiP"
+   * so iPadOS / macOS Safari already has readyState >= 2 and can enter PiP SYNCHRONOUSLY.
    */
   const primeCanvasVideo = useCallback(() => {
     const canvas = canvasRef.current;
@@ -232,14 +242,23 @@ export function usePictureInPicture(
     drawCanvasFrame();
 
     if (!streamRef.current && typeof canvas.captureStream === 'function') {
+      let canvasStream: MediaStream | null = null;
       try {
-        streamRef.current = canvas.captureStream(10);
+        canvasStream = canvas.captureStream(15);
       } catch {
         try {
-          streamRef.current = canvas.captureStream();
+          canvasStream = canvas.captureStream();
         } catch {
           return;
         }
+      }
+      if (canvasStream) {
+        const tracks: MediaStreamTrack[] = [...canvasStream.getVideoTracks()];
+        const audioTrack = getPipAudioTrack();
+        if (audioTrack) {
+          tracks.push(audioTrack);
+        }
+        streamRef.current = new MediaStream(tracks);
       }
     }
 
@@ -247,7 +266,10 @@ export function usePictureInPicture(
       video.srcObject = streamRef.current;
     }
 
-    video.muted = true;
+    // Keep muted while pre-warming; unmuted inside Float PiP tap gesture so chime plays via PiP
+    if (pipKind !== 'video') {
+      video.muted = true;
+    }
     video.playsInline = true;
     video.setAttribute('webkit-playsinline', 'true');
     video.setAttribute('playsinline', 'true');
@@ -255,7 +277,7 @@ export function usePictureInPicture(
     if (video.paused) {
       video.play().catch(() => {});
     }
-  }, [drawCanvasFrame]);
+  }, [drawCanvasFrame, pipKind]);
 
   // Pre-warm on mount + first pointer gesture (handles Safari autoplay policy cleanly)
   useEffect(() => {
@@ -281,10 +303,28 @@ export function usePictureInPicture(
     };
   }, [drawCanvasFrame, primeCanvasVideo]);
 
-  // Smooth 5 FPS canvas refresh while Video PiP is actively floating
+  // Instant reactive redraw whenever alert / dwell / face / count state changes while in Video PiP!
   useEffect(() => {
     if (pipKind !== 'video') return;
     drawCanvasFrame();
+  }, [
+    pipKind,
+    canvasState.stage1Glow,
+    canvasState.stage2AlertOpen,
+    canvasState.handInZone,
+    canvasState.dwellSec,
+    canvasState.urgesRedirected,
+    canvasState.faceState,
+    canvasState.cameraState,
+    canvasState.cameraStalled,
+    canvasState.detectCount,
+    canvasState.calmSeconds,
+    drawCanvasFrame,
+  ]);
+
+  // Smooth periodic pulse refresh while Video PiP is actively floating
+  useEffect(() => {
+    if (pipKind !== 'video') return;
     const timer = window.setInterval(drawCanvasFrame, 200);
     return () => window.clearInterval(timer);
   }, [pipKind, drawCanvasFrame]);
@@ -299,7 +339,13 @@ export function usePictureInPicture(
   const attachLeaveListeners = useCallback((video: WebKitVideoElement) => {
     activePipVideoElRef.current = video;
 
+    const cleanupPiPAudio = () => {
+      setVideoPiPAudioActive(false);
+      video.muted = true;
+    };
+
     const onLeave = () => {
+      cleanupPiPAudio();
       setPipKind('none');
       activePipVideoElRef.current = null;
       video.removeEventListener('leavepictureinpicture', onLeave);
@@ -308,6 +354,7 @@ export function usePictureInPicture(
 
     const onWebKitChange = () => {
       if (video.webkitPresentationMode !== 'picture-in-picture') {
+        cleanupPiPAudio();
         setPipKind('none');
         activePipVideoElRef.current = null;
         video.removeEventListener('webkitpresentationmodechanged', onWebKitChange);
@@ -361,6 +408,10 @@ export function usePictureInPicture(
 
   const closePiP = useCallback(async () => {
     setPipError(null);
+    setVideoPiPAudioActive(false);
+    if (pipVideoRef.current) {
+      pipVideoRef.current.muted = true;
+    }
     if (pipWindow && !pipWindow.closed) {
       pipWindow.close();
     }
@@ -450,8 +501,12 @@ export function usePictureInPicture(
       primeCanvasVideo();
 
       if (pipVideo.readyState >= 1) {
+        // Unmute inside user gesture so singing-bowl chimes play through the PiP video's OS audio session
+        pipVideo.muted = false;
+        pipVideo.volume = 1;
         const res = await tryEnterVideoPiPSync(pipVideo);
         if (res.ok) {
+          setVideoPiPAudioActive(true);
           setPipKind('video');
           // Safari often pauses other <video> elements when one enters PiP — immediately resume camera!
           const nudgeCamera = () => {
@@ -463,6 +518,9 @@ export function usePictureInPicture(
           window.setTimeout(nudgeCamera, 60);
           window.setTimeout(nudgeCamera, 300);
           return;
+        } else {
+          pipVideo.muted = true;
+          setVideoPiPAudioActive(false);
         }
       }
     }

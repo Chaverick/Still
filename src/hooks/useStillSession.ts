@@ -407,7 +407,8 @@ export function useStillSession({
           }
           const elapsedClearMs = wallNow - stage1ClearedAtRef.current;
 
-          if (elapsedClearMs >= 1000) {
+          const glowHoldMs = pipActiveRef.current ? 2500 : 1000;
+          if (elapsedClearMs >= glowHoldMs) {
             setEdgeGlowActive(false);
           }
 
