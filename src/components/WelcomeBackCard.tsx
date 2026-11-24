@@ -2,6 +2,7 @@ import type { WelcomeBackPrompt } from '../types';
 
 interface WelcomeBackCardProps {
   prompt: WelcomeBackPrompt;
+  userName?: string;
   onCalmReturn: (addAwayMinutes: boolean) => void;
   onRedirectedWhileAway: () => void;
   onGraceReturn: () => void;
@@ -10,20 +11,21 @@ interface WelcomeBackCardProps {
 
 export function WelcomeBackCard({
   prompt,
+  userName = '',
   onCalmReturn,
   onRedirectedWhileAway,
   onGraceReturn,
   onDismiss,
 }: WelcomeBackCardProps) {
+  const cleanName = userName.trim();
+
   return (
     <section className="welcome-card" aria-label="Welcome back check-in">
       <div className="welcome-header">
-        <span className="section-label">Welcome back</span>
-        <button
-          type="button"
-          className="text-link-btn"
-          onClick={onDismiss}
-        >
+        <span className="section-label">
+          {cleanName ? `Welcome back, ${cleanName}` : 'Welcome back'}
+        </span>
+        <button type="button" className="text-link-btn" onClick={onDismiss}>
           Just resume
         </button>
       </div>
@@ -31,9 +33,7 @@ export function WelcomeBackCard({
         You stepped away for about {prompt.awayMinutes}{' '}
         {prompt.awayMinutes === 1 ? 'minute' : 'minutes'}.
       </h2>
-      <p className="welcome-copy">
-        How did your hands feel during the break?
-      </p>
+      <p className="welcome-copy">How did your hands feel during the break?</p>
       <div className="welcome-actions">
         <button
           type="button"

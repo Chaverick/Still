@@ -1,88 +1,46 @@
-import { useMemo } from 'react';
-import {
-  COMPETING_RESPONSES,
-  ENVIRONMENT_ANCHORS,
-  formatShortDuration,
-  getLocalDateKey,
-} from '../lib/storage';
-import type { AwarenessEvent, DaySummary, StillSettings } from '../types';
+import { useEffect, useState } from 'react';
+import { COMPETING_RESPONSES, ENVIRONMENT_ANCHORS } from '../lib/storage';
+import type { StillSettings } from '../types';
+import { CompetingResponseVisual } from './CompetingResponseVisual';
 
 interface WhatWorksViewProps {
-  days: Record<string, DaySummary>;
-  events: AwarenessEvent[];
   settings: StillSettings;
   onUpdateSettings: (patch: Partial<StillSettings>) => void;
 }
 
+const PRACTICE_SECONDS = 15;
+
 export function WhatWorksView({
-  days,
-  events,
   settings,
   onUpdateSettings,
 }: WhatWorksViewProps) {
-  const last7Days = useMemo(() => {
-    const out: Array<{ label: string; dateKey: string; calmSeconds: number; redirects: number }> =
-      [];
-    const now = new Date();
-    for (let i = 6; i >= 0; i--) {
-      const d = new Date(now);
-      d.setDate(now.getDate() - i);
-      const key = getLocalDateKey(d.getTime());
-      const summary = days[key];
-      out.push({
-        label: d.toLocaleDateString(undefined, { weekday: 'short' }),
-        dateKey: key,
-        calmSeconds: summary?.calmSeconds ?? 0,
-        redirects: summary?.urgesRedirected ?? 0,
+  const [practicingId, setPracticingId] = useState<string | null>(null);
+  const [practiceRemaining, setPracticeRemaining] = useState(PRACTICE_SECONDS);
+
+  useEffect(() => {
+    if (!practicingId) return;
+    const timer = window.setInterval(() => {
+      setPracticeRemaining((prev) => {
+        if (prev <= 1) {
+          window.clearInterval(timer);
+          setPracticingId(null);
+          return PRACTICE_SECONDS;
+        }
+        return prev - 1;
       });
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [practicingId]);
+
+  const togglePractice = (id: string) => {
+    if (practicingId === id) {
+      setPracticingId(null);
+      setPracticeRemaining(PRACTICE_SECONDS);
+    } else {
+      setPracticingId(id);
+      setPracticeRemaining(PRACTICE_SECONDS);
     }
-    return out;
-  }, [days]);
-
-  const maxCalmSec = Math.max(60, ...last7Days.map((d) => d.calmSeconds));
-
-  const insights = useMemo(() => {
-    const redirects = events.filter(
-      (e) => e.kind === 'redirect-stage1' || e.kind === 'redirect-stage2'
-    );
-    const graces = events.filter((e) => e.kind === 'grace');
-    const totalMoments = redirects.length + graces.length;
-    const redirectRate =
-      totalMoments > 0 ? Math.round((redirects.length / totalMoments) * 100) : null;
-
-    // Find most common window of day for urges
-    const buckets: Record<string, number> = {
-      Morning: 0,
-      Afternoon: 0,
-      Evening: 0,
-      Late: 0,
-    };
-    for (const ev of [...redirects, ...graces]) {
-      const hr = new Date(ev.timestamp).getHours();
-      if (hr >= 5 && hr < 12) buckets.Morning += 1;
-      else if (hr >= 12 && hr < 17) buckets.Afternoon += 1;
-      else if (hr >= 17 && hr < 22) buckets.Evening += 1;
-      else buckets.Late += 1;
-    }
-    const topWindow = Object.entries(buckets).sort((a, b) => b[1] - a[1])[0];
-
-    // Most used competing response
-    const responseCounts: Record<string, number> = {};
-    for (const ev of redirects) {
-      if (ev.responseId) {
-        responseCounts[ev.responseId] = (responseCounts[ev.responseId] ?? 0) + 1;
-      }
-    }
-    const topResponseId = Object.entries(responseCounts).sort((a, b) => b[1] - a[1])[0]?.[0];
-    const topResponse = COMPETING_RESPONSES.find((r) => r.id === topResponseId);
-
-    return {
-      totalMoments,
-      redirectRate,
-      topWindow: topWindow && topWindow[1] > 0 ? topWindow[0] : null,
-      topResponse: topResponse?.title ?? null,
-    };
-  }, [events]);
+  };
 
   const togglePinResponse = (id: string) => {
     const exists = settings.pinnedResponses.includes(id);
@@ -105,86 +63,56 @@ export function WhatWorksView({
       <header className="page-intro">
         <h1 className="page-title">What works</h1>
         <p className="page-lead">
-          Habit Reversal Training pairs gentle awareness with an easy physical alternative. Pin the
-          responses that feel natural to you — Stage 2 will offer them first.
+          Simply lowering your hand works great for light urges. For stronger ones, mirror one of
+          these gentle physical movements — practicing for 15 seconds while calm builds effortless
+          muscle memory.
         </p>
       </header>
 
-      {/* 7-day calm rhythm */}
-      <section className="editorial-section" aria-label="Seven-day calm rhythm">
+      {/* Visual Competing Responses Library */}
+      <section className="editorial-section" aria-label="Visual competing responses">
         <div className="section-head-row">
-          <h2 className="section-heading">Last 7 days · calm rhythm</h2>
-          <span className="section-meta">
-            {insights.redirectRate !== null
-              ? `${insights.redirectRate}% redirected (${insights.totalMoments} noticed)`
-              : 'Builds as you use Still'}
-          </span>
-        </div>
-
-        <div className="rhythm-chart" role="img" aria-label="Seven day calm time bar chart">
-          {last7Days.map((day, idx) => {
-            const pct = Math.max(4, Math.round((day.calmSeconds / maxCalmSec) * 100));
-            const isToday = idx === last7Days.length - 1;
-            return (
-              <div key={day.dateKey} className="rhythm-col">
-                <span className="rhythm-val tabular">
-                  {day.calmSeconds > 0 ? formatShortDuration(day.calmSeconds) : '—'}
-                </span>
-                <div className="rhythm-bar-track">
-                  <div
-                    className={`rhythm-bar ${isToday ? 'rhythm-bar--today' : ''} ${day.calmSeconds === 0 ? 'rhythm-bar--empty' : ''}`}
-                    style={{ height: `${day.calmSeconds === 0 ? 4 : pct}%` }}
-                  />
-                </div>
-                <span className={`rhythm-day ${isToday ? 'rhythm-day--today' : ''}`}>
-                  {day.label}
-                </span>
-              </div>
-            );
-          })}
-        </div>
-
-        {(insights.topWindow || insights.topResponse) && (
-          <div className="pattern-notes">
-            {insights.topWindow && (
-              <p>
-                Most urges have shown up in the <strong>{insights.topWindow.toLowerCase()}</strong>.
-              </p>
-            )}
-            {insights.topResponse && (
-              <p>
-                Most helpful pause so far: <strong>{insights.topResponse}</strong>.
-              </p>
-            )}
-          </div>
-        )}
-      </section>
-
-      {/* Competing Responses Library */}
-      <section className="editorial-section" aria-label="Competing responses">
-        <div className="section-head-row">
-          <h2 className="section-heading">Competing responses (HRT)</h2>
-          <span className="section-meta">Starred appear first in pauses</span>
+          <h2 className="section-heading">Physical resets (see &amp; mirror)</h2>
+          <span className="section-meta">Starred appear first during pauses</span>
         </div>
 
         <div className="response-list">
           {COMPETING_RESPONSES.map((item) => {
             const pinned = settings.pinnedResponses.includes(item.id);
+            const isPracticing = practicingId === item.id;
             return (
-              <article key={item.id} className="response-card">
-                <div className="response-head">
-                  <h3 className="response-title">{item.title}</h3>
-                  <button
-                    type="button"
-                    className={`pin-btn ${pinned ? 'pin-btn--active' : ''}`}
-                    aria-pressed={pinned}
-                    onClick={() => togglePinResponse(item.id)}
-                  >
-                    {pinned ? '★ Prioritized' : '☆ Prioritize'}
-                  </button>
+              <article
+                key={item.id}
+                className={`response-card response-card--visual ${
+                  isPracticing ? 'response-card--practicing' : ''
+                }`}
+              >
+                <CompetingResponseVisual id={item.id} />
+
+                <div className="response-content">
+                  <div className="response-head">
+                    <h3 className="response-title">{item.title}</h3>
+                    <div className="response-head-actions">
+                      <button
+                        type="button"
+                        className={`pin-btn ${isPracticing ? 'pin-btn--practice' : ''}`}
+                        onClick={() => togglePractice(item.id)}
+                      >
+                        {isPracticing ? `Practicing · ${practiceRemaining}s` : 'Try 15s'}
+                      </button>
+                      <button
+                        type="button"
+                        className={`pin-btn ${pinned ? 'pin-btn--active' : ''}`}
+                        aria-pressed={pinned}
+                        onClick={() => togglePinResponse(item.id)}
+                      >
+                        {pinned ? '★ First' : '☆ Star'}
+                      </button>
+                    </div>
+                  </div>
+                  <p className="response-instruction">{item.instruction}</p>
+                  <p className="response-why">{item.why}</p>
                 </div>
-                <p className="response-instruction">{item.instruction}</p>
-                <p className="response-why">{item.why}</p>
               </article>
             );
           })}

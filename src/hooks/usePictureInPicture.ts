@@ -16,6 +16,8 @@ interface WebKitVideoElement extends HTMLVideoElement {
 
 export interface PipCanvasState {
   theme: ThemeMode;
+  userName: string;
+  autoPipOnTabSwitch: boolean;
   status: EngineStatus;
   calmSeconds: number;
   urgesRedirected: number;
@@ -41,6 +43,7 @@ export function usePictureInPicture(
   const [pipWindow, setPipWindow] = useState<Window | null>(null);
   const [pipContainer, setPipContainer] = useState<HTMLElement | null>(null);
   const [pipError, setPipError] = useState<string | null>(null);
+  const [autoPipSupported, setAutoPipSupported] = useState(false);
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const pipVideoRef = useRef<HTMLVideoElement | null>(null);
@@ -72,6 +75,7 @@ export function usePictureInPicture(
     const camActivelyDetecting = isRunning && !camBroken && s.detectCount > 0;
     const isAlert = s.stage2AlertOpen;
     const isStage1 = !camBroken && (s.stage1Glow || s.handInZone);
+    const cleanName = s.userName.trim();
 
     const t = performance.now() / 1000;
     const pulse = 0.5 + 0.5 * Math.sin(t * (isAlert ? 3.2 : 2.2));
@@ -167,13 +171,17 @@ export function usePictureInPicture(
     ctx.fillStyle = camBroken ? accent : camActivelyDetecting ? sage : inkMuted;
     ctx.fillText(confirmLine, pillX + 28, pillY + 20);
 
-    // Main headline
+    // Main headline (personalized with userName when set)
     const title = camBroken
       ? 'Detection paused'
       : isAlert
-        ? 'Gentle pause — hands down.'
+        ? cleanName
+          ? `${cleanName} — hands down.`
+          : 'Gentle pause — hands down.'
         : isStage1
-          ? `Hand near zone · ${s.dwellSec.toFixed(1)}s`
+          ? cleanName
+            ? `${cleanName}, hand near zone · ${s.dwellSec.toFixed(1)}s`
+            : `Hand near zone · ${s.dwellSec.toFixed(1)}s`
           : !isRunning
             ? 'Paused'
             : s.faceState === 'away'
@@ -565,6 +573,41 @@ export function usePictureInPicture(
     }
   }, [closePiP, openPiP, pipKind]);
 
+  // Automatic Picture-in-Picture on tab switch (Desktop Chrome 120+ / Edge)
+  // Uses official MediaSession 'enterpictureinpicture' action handler while camera session is running.
+  useEffect(() => {
+    const ms = typeof navigator !== 'undefined' ? navigator.mediaSession : undefined;
+    if (!ms || typeof ms.setActionHandler !== 'function') {
+      setAutoPipSupported(false);
+      return;
+    }
+
+    const canRegister = canvasState.status === 'running' && canvasState.autoPipOnTabSwitch;
+
+    try {
+      // Feature-probe support cleanly (Safari throws TypeError on unknown action 'enterpictureinpicture')
+      if (canRegister) {
+        ms.setActionHandler('enterpictureinpicture' as MediaSessionAction, () => {
+          void openPiP();
+        });
+        setAutoPipSupported(true);
+      } else {
+        ms.setActionHandler('enterpictureinpicture' as MediaSessionAction, null);
+        setAutoPipSupported(true);
+      }
+    } catch {
+      setAutoPipSupported(false);
+    }
+
+    return () => {
+      try {
+        ms.setActionHandler('enterpictureinpicture' as MediaSessionAction, null);
+      } catch {
+        // ignore
+      }
+    };
+  }, [canvasState.status, canvasState.autoPipOnTabSwitch, openPiP]);
+
   useEffect(() => {
     return () => {
       if (streamRef.current) {
@@ -580,6 +623,7 @@ export function usePictureInPicture(
     pipContainer,
     pipError,
     isSupported,
+    autoPipSupported,
     canvasRef,
     pipVideoRef,
     primeCanvasVideo,

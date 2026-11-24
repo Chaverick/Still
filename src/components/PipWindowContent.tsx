@@ -2,6 +2,7 @@ import { COMPETING_RESPONSES, formatDuration } from '../lib/storage';
 import type { EngineStatus } from '../types';
 
 interface PipWindowContentProps {
+  userName?: string;
   status: EngineStatus;
   calmSeconds: number;
   urgesRedirected: number;
@@ -31,6 +32,7 @@ interface PipWindowContentProps {
  * Interactive mini-window rendered inside Document Picture-in-Picture (Chrome / Edge desktop).
  */
 export function PipWindowContent({
+  userName = '',
   status,
   calmSeconds,
   urgesRedirected,
@@ -60,6 +62,7 @@ export function PipWindowContent({
   const camActivelyDetecting = isRunning && !camBroken && detectCount > 0;
   const isGlowing = !camBroken && (stage2AlertOpen || stage1Glow || handInZone);
   const dwellPct = Math.min(100, Math.round((dwellSec / Math.max(0.5, stage2DwellSec)) * 100));
+  const cleanName = userName.trim();
 
   const topResponse =
     COMPETING_RESPONSES.find((r) => pinnedResponses.includes(r.id)) ?? COMPETING_RESPONSES[0];
@@ -124,7 +127,9 @@ export function PipWindowContent({
 
       {stage2AlertOpen ? (
         <div className="pip-alert-body">
-          <h2 className="pip-headline">Hands down · let it pass.</h2>
+          <h2 className="pip-headline">
+            {cleanName ? `${cleanName} — hands down.` : 'Hands down · let it pass.'}
+          </h2>
           <p className="pip-prompt">{topResponse.instruction}</p>
           <div className="pip-alert-actions">
             <button
@@ -156,7 +161,9 @@ export function PipWindowContent({
             {camBroken
               ? 'Detection paused'
               : isGlowing
-                ? `Hand near zone · ${dwellSec.toFixed(1)}s`
+                ? cleanName
+                  ? `${cleanName}, hand near zone · ${dwellSec.toFixed(1)}s`
+                  : `Hand near zone · ${dwellSec.toFixed(1)}s`
                 : !isRunning
                   ? 'Paused'
                   : faceState === 'away'

@@ -10,6 +10,7 @@ import type {
   WelcomeBackPrompt,
 } from '../types';
 import { CalibrationDrawer } from './CalibrationDrawer';
+import { TypewriterHeadline } from './TypewriterHeadline';
 import { WelcomeBackCard } from './WelcomeBackCard';
 
 interface TodayViewProps {
@@ -23,7 +24,9 @@ interface TodayViewProps {
   onStop: () => void;
   onTestStage1: () => void;
   onTestStage2: () => void;
+  onOpenSettings: () => void;
   pipSupported: boolean;
+  autoPipSupported: boolean;
   pipKind: PiPKind;
   pipError: string | null;
   onTogglePiP: () => void;
@@ -58,7 +61,9 @@ export function TodayView({
   onStop,
   onTestStage1,
   onTestStage2,
+  onOpenSettings,
   pipSupported,
+  autoPipSupported,
   pipKind,
   pipError,
   onTogglePiP,
@@ -84,12 +89,17 @@ export function TodayView({
   const isRunning = status === 'running';
   const isBusy = status === 'requesting-camera' || status === 'loading-models';
   const pipActive = pipKind !== 'none';
+  const name = settings.userName.trim();
 
   const headline = (() => {
     if (status === 'requesting-camera') return 'Opening your front camera locally.';
     if (status === 'loading-models') return 'Preparing on-device awareness.';
     if (status === 'running') {
-      if (frameGeometry?.handInZone) return 'Noticing a hand in your watched zone.';
+      if (frameGeometry?.handInZone) {
+        return name
+          ? `${name}, noticing a hand near your brow.`
+          : 'Noticing a hand in your watched zone.';
+      }
       if (diagnostics.faceState === 'away') return 'Waiting quietly until you return.';
       return 'You are here. Hands at ease.';
     }
@@ -106,7 +116,7 @@ export function TodayView({
     }
     if (status === 'running') {
       if (pipActive) {
-        return 'Floating in Picture-in-Picture at 4 FPS. Switch to another app or tab freely.';
+        return 'Floating in a mini-window at 4 FPS. Switch to another tab or app freely.';
       }
       return diagnostics.faceState === 'cached'
         ? 'Occlusion cache holding your watched zone steady.'
@@ -115,12 +125,21 @@ export function TodayView({
     return '100% on-device eyebrow awareness. Zero cloud calls, zero video saved.';
   })();
 
+  const activeCueSummary = [
+    settings.stage1Enabled ? `Stage 1 (${settings.stage1DwellSec.toFixed(1)}s)` : null,
+    settings.stage2Enabled ? `Stage 2 (${settings.stage2DwellSec.toFixed(1)}s)` : null,
+    settings.soundEnabled ? 'Chime on' : 'Visual only',
+  ]
+    .filter(Boolean)
+    .join(' · ');
+
   return (
     <div className="view-stack">
       {/* Welcome Back check-in after 5-min walk or stepping away */}
       {welcomeBack && (
         <WelcomeBackCard
           prompt={welcomeBack}
+          userName={name}
           onCalmReturn={onWelcomeCalm}
           onRedirectedWhileAway={onWelcomeRedirect}
           onGraceReturn={onWelcomeGrace}
@@ -178,7 +197,7 @@ export function TodayView({
 
       {/* Hero Stillness Section */}
       <section className="hero-section" aria-label="Session status">
-        <h1 className="hero-headline">{headline}</h1>
+        <TypewriterHeadline text={headline} />
         <p className="hero-subline">{subline}</p>
 
         <div className="hero-cta-row">
@@ -212,9 +231,10 @@ export function TodayView({
               type="button"
               id="btn-toggle-pip"
               className={`btn btn-lg ${pipActive ? 'btn-subtle' : 'btn-ghost'}`}
+              title="Picture-in-Picture: floats a tiny Still card in the corner while you use other tabs or apps"
               onClick={onTogglePiP}
             >
-              {pipActive ? 'Close floating PiP' : 'Float PiP'}
+              {pipActive ? 'Close mini-window' : 'Float mini-window'}
             </button>
           )}
 
@@ -228,6 +248,17 @@ export function TodayView({
           </button>
         </div>
 
+        {/* Clear, friendly 1-line explanation of Floating Mini-Window (PiP) */}
+        {pipSupported && (
+          <p className="pip-helper-line">
+            <strong>Mini-window (Picture-in-Picture)</strong> floats a tiny Still card in the
+            corner while you read or browse other tabs
+            {autoPipSupported && settings.autoPipOnTabSwitch
+              ? ' — and pops out automatically when you switch tabs.'
+              : '.'}
+          </p>
+        )}
+
         {(errorMessage || pipError) && (
           <p className="inline-error" role="alert">
             {errorMessage || pipError}
@@ -240,7 +271,9 @@ export function TodayView({
             <span className="autocatch-text">
               {stage1AutoCatch.handClearedAt
                 ? `Hand lowered — auto-catching redirect in ${stage1AutoCatch.remainingSec}s`
-                : 'Hand near zone — lower gently to redirect'}
+                : name
+                  ? `${name}, hand near zone — lower gently to redirect`
+                  : 'Hand near zone — lower gently to redirect'}
             </span>
             <button
               type="button"
@@ -278,118 +311,33 @@ export function TodayView({
         </div>
       </section>
 
-      {/* Two-Stage Gentle Alerting Controls */}
-      <section className="editorial-section" aria-label="Gentle alerting settings">
-        <div className="section-head-row">
-          <h2 className="section-heading">Gentle cues</h2>
+      {/* Quiet 1-line summary bar linking to Settings for Gentle cues */}
+      <div className="cue-summary-bar">
+        <span className="cue-summary-text">
+          {activeCueSummary || 'All gentle cues paused'}
+        </span>
+        <div className="settings-inline-actions">
           <button
             type="button"
-            id="btn-preview-pause-sheet"
+            id="btn-today-preview-pause"
             className="text-link-btn"
             onClick={onTestStage2}
           >
-            Preview 60s pause sheet
+            Preview pause
+          </button>
+          <span className="meta-dot" aria-hidden="true">
+            ·
+          </span>
+          <button
+            type="button"
+            id="btn-open-cue-settings"
+            className="text-link-btn"
+            onClick={onOpenSettings}
+          >
+            Cue settings →
           </button>
         </div>
-
-        <div className="toggle-list">
-          <div className="toggle-row">
-            <div className="toggle-copy">
-              <div className="toggle-title">
-                Stage 1 · Edge glow &amp; singing bowl{' '}
-                <span className="inline-timing tabular">
-                  ~{settings.stage1DwellSec.toFixed(1)}s
-                </span>
-              </div>
-              <p className="toggle-desc">
-                Warm peripheral screen glow and soft chime, with a 5-second auto-catch when you
-                lower your hand.
-              </p>
-            </div>
-            <button
-              type="button"
-              id="toggle-stage1"
-              role="switch"
-              aria-checked={settings.stage1Enabled}
-              aria-label="Toggle Stage 1 warm glow and chime"
-              className={`switch ${settings.stage1Enabled ? 'switch--on' : ''}`}
-              onClick={() => onUpdateSettings({ stage1Enabled: !settings.stage1Enabled })}
-            >
-              <span className="switch-thumb" />
-            </button>
-          </div>
-
-          <div className="toggle-row">
-            <div className="toggle-copy">
-              <div className="toggle-title">
-                Stage 2 · 60s competing-response pause{' '}
-                <span className="inline-timing tabular">
-                  ~{settings.stage2DwellSec.toFixed(1)}s
-                </span>
-              </div>
-              <p className="toggle-desc">
-                Calm HRT pause sheet with glowing light, breath pacing, auto-catch, Grace recovery,
-                and False alarm.
-              </p>
-            </div>
-            <button
-              type="button"
-              id="toggle-stage2"
-              role="switch"
-              aria-checked={settings.stage2Enabled}
-              aria-label="Toggle Stage 2 60-second pause sheet"
-              className={`switch ${settings.stage2Enabled ? 'switch--on' : ''}`}
-              onClick={() => onUpdateSettings({ stage2Enabled: !settings.stage2Enabled })}
-            >
-              <span className="switch-thumb" />
-            </button>
-          </div>
-
-          <div className="toggle-row">
-            <div className="toggle-copy">
-              <div className="toggle-title">Singing-bowl chime audio</div>
-              <p className="toggle-desc">
-                Synthesized locally via Web Audio. Turn off for visual-only glowing light in quiet
-                rooms.
-              </p>
-            </div>
-            <button
-              type="button"
-              id="toggle-sound"
-              role="switch"
-              aria-checked={settings.soundEnabled}
-              aria-label="Toggle singing-bowl chime audio"
-              className={`switch ${settings.soundEnabled ? 'switch--on' : ''}`}
-              onClick={() => onUpdateSettings({ soundEnabled: !settings.soundEnabled })}
-            >
-              <span className="switch-thumb" />
-            </button>
-          </div>
-
-          <div className="toggle-row">
-            <div className="toggle-copy">
-              <div className="toggle-title">Repeat soft chime during pause alert</div>
-              <p className="toggle-desc">
-                Gently repeats the singing bowl every few seconds alongside the glowing light until
-                you respond or mute it.
-              </p>
-            </div>
-            <button
-              type="button"
-              id="toggle-repeat-chime"
-              role="switch"
-              aria-checked={settings.stage2RepeatChime}
-              aria-label="Toggle repeating chime during Stage 2 pause alert"
-              className={`switch ${settings.stage2RepeatChime ? 'switch--on' : ''}`}
-              onClick={() =>
-                onUpdateSettings({ stage2RepeatChime: !settings.stage2RepeatChime })
-              }
-            >
-              <span className="switch-thumb" />
-            </button>
-          </div>
-        </div>
-      </section>
+      </div>
 
       {/* Expandable Silhouette / Camera Calibration Preview */}
       <CalibrationDrawer

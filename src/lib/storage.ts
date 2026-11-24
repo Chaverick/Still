@@ -107,10 +107,12 @@ export const ZONE_OPTIONS: Array<{
 ];
 
 export const DEFAULT_SETTINGS: StillSettings = {
+  userName: '',
   stage1Enabled: true,
   stage2Enabled: true,
   soundEnabled: true,
   stage2RepeatChime: true,
+  autoPipOnTabSwitch: true,
   stage1DwellSec: 1.2,
   stage2DwellSec: 2.6,
   zoneScale: 1.0,

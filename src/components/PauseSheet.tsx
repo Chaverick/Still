@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { playSingingBowl, unlockAudio } from '../lib/audio';
 import { COMPETING_RESPONSES, CONTEXT_TAGS } from '../lib/storage';
 import type { CompetingResponse } from '../types';
+import { CompetingResponseVisual } from './CompetingResponseVisual';
 
 const PAUSE_DURATION_SEC = 60;
 const REPEAT_CHIME_INTERVAL_MS = 3800;
@@ -9,6 +10,7 @@ const REPEAT_CHIME_INTERVAL_MS = 3800;
 interface PauseSheetProps {
   open: boolean;
   isPreview?: boolean;
+  userName?: string;
   handInZone: boolean;
   sessionRunning: boolean;
   soundEnabled: boolean;
@@ -22,6 +24,7 @@ interface PauseSheetProps {
 export function PauseSheet({
   open,
   isPreview = false,
+  userName = '',
   handInZone,
   sessionRunning,
   soundEnabled,
@@ -44,6 +47,7 @@ export function PauseSheet({
   const [chimeMutedThisAlert, setChimeMutedThisAlert] = useState(false);
 
   const currentResponse = orderedResponses[responseIndex % orderedResponses.length];
+  const cleanName = userName.trim();
 
   // Reset countdown & chime mute whenever sheet opens
   useEffect(() => {
@@ -63,7 +67,6 @@ export function PauseSheet({
   useEffect(() => {
     if (!open || graceStep || !soundEnabled || chimeMutedThisAlert) return;
 
-    // Soft immediate chime when the alert opens
     playSingingBowl('repeat');
 
     if (!repeatChimeEnabled) return;
@@ -101,7 +104,6 @@ export function PauseSheet({
   const circumference = 2 * Math.PI * radius;
   const dashOffset = circumference * (1 - progress);
 
-  // 14-second gentle breathing cadence: 4s inhale, 4s hold, 6s exhale
   const elapsed = PAUSE_DURATION_SEC - remainingSec;
   const breathCycle = elapsed % 14;
   const breathCue =
@@ -114,7 +116,6 @@ export function PauseSheet({
       aria-modal="true"
       aria-labelledby="pause-sheet-title"
     >
-      {/* Prominent luminous warm ambient halo behind the alert card */}
       <div className="sheet-aura" aria-hidden="true" />
 
       <div
@@ -162,7 +163,9 @@ export function PauseSheet({
         {!graceStep ? (
           <>
             <h2 id="pause-sheet-title" className="sheet-title">
-              Let the urge crest and pass.
+              {cleanName
+                ? `${cleanName}, let the urge crest and pass.`
+                : 'Let the urge crest and pass.'}
             </h2>
 
             <div className="breath-timer-wrap breath-timer-wrap--luminous">
@@ -188,20 +191,23 @@ export function PauseSheet({
               </div>
             </div>
 
-            <div className="hrt-prompt-box">
-              <div className="hrt-prompt-head">
-                <span className="hrt-prompt-title">{currentResponse.title}</span>
-                <button
-                  type="button"
-                  className="text-link-btn"
-                  onClick={() =>
-                    setResponseIndex((i) => (i + 1) % orderedResponses.length)
-                  }
-                >
-                  Try another
-                </button>
+            <div className="hrt-prompt-box hrt-prompt-box--visual">
+              <CompetingResponseVisual id={currentResponse.id} compact />
+              <div className="hrt-prompt-text">
+                <div className="hrt-prompt-head">
+                  <span className="hrt-prompt-title">{currentResponse.title}</span>
+                  <button
+                    type="button"
+                    className="text-link-btn"
+                    onClick={() =>
+                      setResponseIndex((i) => (i + 1) % orderedResponses.length)
+                    }
+                  >
+                    Try another
+                  </button>
+                </div>
+                <p className="hrt-prompt-body">{currentResponse.instruction}</p>
               </div>
-              <p className="hrt-prompt-body">{currentResponse.instruction}</p>
             </div>
 
             <p className="sheet-subnote">
@@ -240,7 +246,7 @@ export function PauseSheet({
         ) : (
           <>
             <h2 id="pause-sheet-title" className="sheet-title">
-              Reset with grace.
+              {cleanName ? `Reset with grace, ${cleanName}.` : 'Reset with grace.'}
             </h2>
             <p className="sheet-grace-copy">
               Noticing is already part of rewiring the habit. Your calm time from today stays intact.

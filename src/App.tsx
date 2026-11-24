@@ -5,6 +5,7 @@ import { NotesView } from './components/NotesView';
 import { PauseSheet } from './components/PauseSheet';
 import { PipWindowContent } from './components/PipWindowContent';
 import { ProgressView } from './components/ProgressView';
+import { SettingsView } from './components/SettingsView';
 import { TodayView } from './components/TodayView';
 import { WhatWorksView } from './components/WhatWorksView';
 import { usePictureInPicture } from './hooks/usePictureInPicture';
@@ -152,6 +153,8 @@ export function App() {
   const pip = usePictureInPicture(
     {
       theme,
+      userName: settings.userName,
+      autoPipOnTabSwitch: settings.autoPipOnTabSwitch,
       status: session.status,
       calmSeconds: today.calmSeconds,
       urgesRedirected: today.urgesRedirected,
@@ -517,6 +520,7 @@ export function App() {
       {pip.pipContainer &&
         createPortal(
           <PipWindowContent
+            userName={settings.userName}
             status={session.status}
             calmSeconds={today.calmSeconds}
             urgesRedirected={today.urgesRedirected}
@@ -596,6 +600,15 @@ export function App() {
             >
               Notes
             </button>
+            <button
+              type="button"
+              id="nav-settings"
+              className={`nav-tab ${activeTab === 'settings' ? 'nav-tab--active' : ''}`}
+              aria-current={activeTab === 'settings' ? 'page' : undefined}
+              onClick={() => setActiveTab('settings')}
+            >
+              Settings
+            </button>
           </nav>
 
           <button
@@ -631,7 +644,9 @@ export function App() {
               unlockAudio();
               setPauseSheetState({ open: true, isPreview: true });
             }}
+            onOpenSettings={() => setActiveTab('settings')}
             pipSupported={pip.isSupported}
+            autoPipSupported={pip.autoPipSupported}
             pipKind={pip.pipKind}
             pipError={pip.pipError}
             onTogglePiP={() => {
@@ -671,8 +686,6 @@ export function App() {
 
         {activeTab === 'what-works' && (
           <WhatWorksView
-            days={days}
-            events={events}
             settings={settings}
             onUpdateSettings={updateSettings}
           />
@@ -686,6 +699,21 @@ export function App() {
             onDeleteNote={handleDeleteNote}
             onExportData={handleExportData}
             onClearData={handleClearData}
+          />
+        )}
+
+        {activeTab === 'settings' && (
+          <SettingsView
+            settings={settings}
+            theme={theme}
+            autoPipSupported={pip.autoPipSupported}
+            onUpdateSettings={updateSettings}
+            onToggleTheme={() => setTheme((t) => (t === 'light' ? 'dark' : 'light'))}
+            onTestStage1={session.triggerTestCue}
+            onTestStage2={() => {
+              unlockAudio();
+              setPauseSheetState({ open: true, isPreview: true });
+            }}
           />
         )}
       </main>
@@ -712,6 +740,7 @@ export function App() {
       <PauseSheet
         open={pauseSheetState.open}
         isPreview={pauseSheetState.isPreview}
+        userName={settings.userName}
         handInZone={Boolean(session.frameGeometry?.handInZone)}
         sessionRunning={session.status === 'running'}
         soundEnabled={settings.soundEnabled}

@@ -2123,13 +2123,419 @@ input[type='range'] {
 }
 
 /* ==========================================================================
+   Typewriter Headline Caret, Today Cue Summary & PiP Helper
+   ========================================================================== */
+
+.hero-headline {
+  min-height: 2.35em;
+}
+
+.type-caret {
+  display: inline-block;
+  width: 2px;
+  height: 0.85em;
+  margin-left: 3px;
+  vertical-align: -0.08em;
+  background: var(--accent);
+  border-radius: 1px;
+  opacity: 0;
+  transition: opacity 280ms ease;
+}
+
+.type-caret--active {
+  opacity: 0.85;
+  animation: caret-blink 0.85s ease-in-out infinite;
+}
+
+@keyframes caret-blink {
+  0%,
+  100% {
+    opacity: 0.9;
+  }
+  50% {
+    opacity: 0.25;
+  }
+}
+
+.pip-helper-line {
+  margin: 2px 0 0;
+  font-size: 13px;
+  color: var(--ink-muted);
+  max-width: 56ch;
+}
+
+.pip-helper-line strong {
+  font-weight: 500;
+  color: var(--ink-secondary);
+}
+
+.cue-summary-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 12px 16px;
+  border-radius: var(--radius-md);
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  font-size: 13px;
+}
+
+.cue-summary-text {
+  color: var(--ink-secondary);
+}
+
+/* ==========================================================================
+   Settings View
+   ========================================================================== */
+
+.settings-card {
+  padding: 18px 20px;
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-sm);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.editorial-input {
+  width: 100%;
+  max-width: 320px;
+  padding: 10px 14px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-strong);
+  background: var(--bg);
+  color: var(--ink);
+  font-size: 15px;
+  outline: none;
+  transition: border-color 160ms ease, box-shadow 160ms ease;
+}
+
+.editorial-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.settings-preview-note {
+  margin: 0;
+  font-size: 13.5px;
+  color: var(--ink-secondary);
+}
+
+.settings-preview-note em {
+  font-family: var(--font-serif);
+  font-style: italic;
+  color: var(--ink);
+}
+
+.settings-explainer {
+  margin: 0;
+  font-size: 14px;
+  color: var(--ink-secondary);
+  line-height: 1.58;
+}
+
+.settings-explainer strong {
+  color: var(--ink);
+  font-weight: 500;
+}
+
+.settings-inline-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.meta-dot {
+  color: var(--ink-muted);
+}
+
+.toggle-row--compact {
+  padding: 14px 0 2px;
+  border-bottom: none;
+  border-top: 1px solid var(--border);
+}
+
+/* ==========================================================================
+   Lightweight Pure-SVG HRT Competing Response Animations (< 3 KB)
+   ========================================================================== */
+
+.response-card--visual {
+  flex-direction: row;
+  align-items: center;
+  gap: 18px;
+}
+
+.response-card--practicing {
+  border-color: color-mix(in srgb, var(--sage) 55%, var(--border));
+  background: color-mix(in srgb, var(--sage-soft) 35%, var(--surface));
+}
+
+.response-content {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.response-head-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.pin-btn--practice {
+  border-color: color-mix(in srgb, var(--sage) 55%, transparent);
+  background: var(--sage-soft);
+  color: var(--sage);
+}
+
+.hrt-visual {
+  width: 112px;
+  height: 74px;
+  flex-shrink: 0;
+  border-radius: var(--radius-md);
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  color: var(--ink);
+}
+
+.hrt-visual svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.hrt-visual--compact {
+  width: 90px;
+  height: 62px;
+  background: var(--surface);
+}
+
+.hrt-prompt-box--visual {
+  flex-direction: row;
+  align-items: center;
+  gap: 14px;
+}
+
+.hrt-prompt-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* GPU-composited pure-CSS SVG micro-animations */
+.anim-palms-settle {
+  animation: palms-settle 3.4s ease-in-out infinite;
+}
+
+@keyframes palms-settle {
+  0%,
+  100% {
+    transform: translateY(-9px);
+  }
+  40%,
+  72% {
+    transform: translateY(2px);
+  }
+}
+
+.anim-ripple {
+  transform-origin: center;
+  transform-box: fill-box;
+  animation: gentle-ripple 3.4s ease-out infinite;
+}
+
+.anim-ripple--delay {
+  animation-delay: 0.15s;
+}
+
+@keyframes gentle-ripple {
+  0%,
+  36% {
+    opacity: 0;
+    transform: scale(0.55);
+  }
+  52% {
+    opacity: 0.65;
+    transform: scale(1);
+  }
+  85%,
+  100% {
+    opacity: 0;
+    transform: scale(1.25);
+  }
+}
+
+.anim-finger-left {
+  animation: finger-left-press 3.2s ease-in-out infinite;
+}
+
+.anim-finger-right {
+  animation: finger-right-press 3.2s ease-in-out infinite;
+}
+
+@keyframes finger-left-press {
+  0%,
+  100% {
+    transform: translate(-5px, 4px);
+  }
+  38%,
+  72% {
+    transform: translate(0, 0);
+  }
+}
+
+@keyframes finger-right-press {
+  0%,
+  100% {
+    transform: translate(5px, -4px);
+  }
+  38%,
+  72% {
+    transform: translate(0, 0);
+  }
+}
+
+.anim-contact-halo {
+  transform-origin: center;
+  transform-box: fill-box;
+  animation: contact-pulse 3.2s ease-in-out infinite;
+}
+
+.anim-contact-dot {
+  animation: contact-dot 3.2s ease-in-out infinite;
+}
+
+@keyframes contact-pulse {
+  0%,
+  28% {
+    opacity: 0;
+    transform: scale(0.5);
+  }
+  52% {
+    opacity: 0.9;
+    transform: scale(1.1);
+  }
+  80%,
+  100% {
+    opacity: 0.2;
+    transform: scale(0.85);
+  }
+}
+
+@keyframes contact-dot {
+  0%,
+  25% {
+    opacity: 0.25;
+  }
+  45%,
+  75% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0.25;
+  }
+}
+
+.anim-breath-circle {
+  transform-origin: center;
+  transform-box: fill-box;
+  animation: breath-expand 5.6s ease-in-out infinite;
+}
+
+@keyframes breath-expand {
+  0%,
+  100% {
+    transform: scale(0.78);
+    opacity: 0.45;
+  }
+  42% {
+    transform: scale(1.06);
+    opacity: 0.9;
+  }
+}
+
+.anim-wrist-reset {
+  animation: wrist-reset 3.6s ease-in-out infinite;
+}
+
+@keyframes wrist-reset {
+  0%,
+  18% {
+    transform: translateY(-2px);
+    opacity: 0.95;
+  }
+  45% {
+    transform: translateY(1px);
+    opacity: 1;
+  }
+  78%,
+  100% {
+    transform: translateY(20px);
+    opacity: 0.3;
+  }
+}
+
+.anim-step-1 {
+  animation: step-fade 2.6s ease-in-out infinite;
+}
+
+.anim-step-2 {
+  animation: step-fade 2.6s ease-in-out 0.45s infinite;
+}
+
+.anim-step-3 {
+  animation: step-fade 2.6s ease-in-out 0.9s infinite;
+}
+
+@keyframes step-fade {
+  0%,
+  100% {
+    opacity: 0.22;
+  }
+  40% {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .type-caret--active,
+  .anim-palms-settle,
+  .anim-ripple,
+  .anim-finger-left,
+  .anim-finger-right,
+  .anim-contact-halo,
+  .anim-contact-dot,
+  .anim-breath-circle,
+  .anim-wrist-reset,
+  .anim-step-1,
+  .anim-step-2,
+  .anim-step-3 {
+    animation: none;
+  }
+}
+
+/* ==========================================================================
    Responsive Adjustments (iPad Portrait / Phone)
    ========================================================================== */
 
-@media (max-width: 600px) {
+@media (max-width: 640px) {
   .top-header-inner {
-    padding: 12px 14px;
+    padding: 10px 14px;
     gap: 8px;
+    flex-wrap: wrap;
   }
 
   .brand-name {
@@ -2137,7 +2543,12 @@ input[type='range'] {
   }
 
   .nav-tabs {
+    order: 3;
+    width: 100%;
+    justify-content: space-between;
     gap: 2px;
+    padding-top: 4px;
+    border-top: 1px solid var(--border);
   }
 
   .main-column {
@@ -2150,12 +2561,23 @@ input[type='range'] {
   }
 
   .nav-tab {
-    padding: 5px 8px;
-    font-size: 13px;
+    padding: 5px 7px;
+    font-size: 12.5px;
   }
 
   .sheet-card {
     padding: 24px 20px;
+  }
+
+  .response-card--visual,
+  .hrt-prompt-box--visual {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .hrt-visual {
+    width: 100%;
+    height: 82px;
   }
 
   .trend-bars {

@@ -1,15 +1,17 @@
 export type ThemeMode = 'light' | 'dark';
-export type TabId = 'today' | 'progress' | 'what-works' | 'notes';
+export type TabId = 'today' | 'progress' | 'what-works' | 'notes' | 'settings';
 export type PreviewMode = 'silhouette' | 'camera';
 export type DelegateMode = 'GPU' | 'CPU' | null;
 export type DetectionZoneId = 'left-brow' | 'right-brow' | 'lashes' | 'hairline';
 export type PiPKind = 'none' | 'document' | 'video';
 
 export interface StillSettings {
+  userName: string;
   stage1Enabled: boolean;
   stage2Enabled: boolean;
   soundEnabled: boolean;
   stage2RepeatChime: boolean;
+  autoPipOnTabSwitch: boolean;
   stage1DwellSec: number; // default 1.2s
   stage2DwellSec: number; // default 2.6s
   zoneScale: number; // multiplier on eye-width normalized halo, default 1.0
