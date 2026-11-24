@@ -2599,3 +2599,26 @@ input[type='range'] {
     gap: 6px;
   }
 }
+
+/* Camera selector controls */
+.camera-picker-row {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.editorial-select {
+  width: 100%;
+  padding: 9px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  background: var(--bg);
+  color: var(--ink);
+  font-size: 14px;
+}
+
+.editorial-select--compact {
+  width: auto;
+  padding: 4px 10px;
+  font-size: 13px;
+}

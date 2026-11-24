@@ -17,9 +17,16 @@ export interface StillSettings {
   zoneScale: number; // multiplier on eye-width normalized halo, default 1.0
   activeZones: DetectionZoneId[];
   pinchFilterEnabled: boolean; // optional thumb-index/middle pinch filter to reduce casual scratch false alarms
+  smartFalseAlarmGuard: boolean; // high-recall precision guard for ear touches & drinking from a glass
+  selectedCameraId: string; // '' = automatic front-facing camera selection
   previewMode: PreviewMode;
   pinnedResponses: string[];
   checkedAnchors: string[];
+}
+
+export interface CameraDeviceOption {
+  deviceId: string;
+  label: string;
 }
 
 export type AwarenessEventKind =
@@ -89,6 +96,7 @@ export interface FrameGeometry {
   haloRadius: number; // primary brow isotropic radius
   fingertips: Array<Point2D & { inZone: boolean; handIndex: number; pinching: boolean }>;
   handInZone: boolean;
+  filteredReason: 'ear' | 'drinking' | 'foreground' | null;
   closestRatio: number | null; // closest fingertip dist / zoneRadius (< 1 means inside)
 }
 
@@ -96,6 +104,7 @@ export type EngineStatus =
   | 'idle'
   | 'requesting-camera'
   | 'loading-models'
+  | 'choosing-camera'
   | 'running'
   | 'error';
 
@@ -106,6 +115,7 @@ export interface VisionDiagnostics {
   sideAngle: boolean;
   cameraState: 'live' | 'muted' | 'ended';
   cameraStalled: boolean;
+  cameraLabel?: string;
   detectCount: number;
   handsCount: number;
   modelsCached: boolean;

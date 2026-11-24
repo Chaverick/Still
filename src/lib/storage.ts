@@ -118,6 +118,8 @@ export const DEFAULT_SETTINGS: StillSettings = {
   zoneScale: 1.0,
   activeZones: ['left-brow', 'right-brow'],
   pinchFilterEnabled: false,
+  smartFalseAlarmGuard: true,
+  selectedCameraId: '',
   previewMode: 'silhouette',
   pinnedResponses: ['palms-flat', 'thumb-index-press'],
   checkedAnchors: [],

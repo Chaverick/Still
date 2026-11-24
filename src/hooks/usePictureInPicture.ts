@@ -35,6 +35,8 @@ export interface PipCanvasState {
   stage2DwellSec: number;
 }
 
+export type AutoPipPermissionState = 'granted' | 'prompt' | 'denied' | 'unknown';
+
 export function usePictureInPicture(
   canvasState: PipCanvasState,
   cameraVideoRef?: React.RefObject<HTMLVideoElement | null>
@@ -44,11 +46,13 @@ export function usePictureInPicture(
   const [pipContainer, setPipContainer] = useState<HTMLElement | null>(null);
   const [pipError, setPipError] = useState<string | null>(null);
   const [autoPipSupported, setAutoPipSupported] = useState(false);
+  const [autoPipPermission, setAutoPipPermission] = useState<AutoPipPermissionState>('unknown');
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const pipVideoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const activePipVideoElRef = useRef<WebKitVideoElement | null>(null);
+  const openingRef = useRef(false);
   const stateRef = useRef(canvasState);
   stateRef.current = canvasState;
 
@@ -446,124 +450,147 @@ export function usePictureInPicture(
     setPipKind('none');
   }, [pipWindow]);
 
-  const openPiP = useCallback(async () => {
-    setPipError(null);
+  const openPiP = useCallback(
+    async (opts?: { silent?: boolean }) => {
+      const silent = Boolean(opts?.silent);
+      if (openingRef.current) return;
 
-    // 1. Desktop Chrome / Edge: Document Picture-in-Picture (interactive mini HTML window)
-    const docPiP = (window as unknown as { documentPictureInPicture?: DocumentPiPApi })
-      .documentPictureInPicture;
+      // 1. Desktop Chrome / Edge: Document Picture-in-Picture (interactive mini HTML window)
+      const docPiP = (window as unknown as { documentPictureInPicture?: DocumentPiPApi })
+        .documentPictureInPicture;
 
-    if (docPiP?.requestWindow) {
+      if (docPiP?.window && !docPiP.window.closed) {
+        return;
+      }
+
+      openingRef.current = true;
+      if (!silent) {
+        setPipError(null);
+      }
+
       try {
-        const win = await docPiP.requestWindow({ width: 344, height: 310 });
-        win.document.documentElement.setAttribute('data-theme', stateRef.current.theme);
-        win.document.title = 'Still · Floating';
-
-        for (const sheet of Array.from(document.styleSheets)) {
+        if (docPiP?.requestWindow) {
           try {
-            if (sheet.href) {
-              const link = win.document.createElement('link');
-              link.rel = 'stylesheet';
-              link.href = sheet.href;
-              win.document.head.appendChild(link);
-            } else if (sheet.cssRules) {
-              const style = win.document.createElement('style');
-              style.textContent = Array.from(sheet.cssRules)
-                .map((r) => r.cssText)
-                .join('\n');
-              win.document.head.appendChild(style);
+            const win = await docPiP.requestWindow({ width: 344, height: 310 });
+            win.document.documentElement.setAttribute('data-theme', stateRef.current.theme);
+            win.document.title = 'Still · Floating';
+
+            for (const sheet of Array.from(document.styleSheets)) {
+              try {
+                if (sheet.href) {
+                  const link = win.document.createElement('link');
+                  link.rel = 'stylesheet';
+                  link.href = sheet.href;
+                  win.document.head.appendChild(link);
+                } else if (sheet.cssRules) {
+                  const style = win.document.createElement('style');
+                  style.textContent = Array.from(sheet.cssRules)
+                    .map((r) => r.cssText)
+                    .join('\n');
+                  win.document.head.appendChild(style);
+                }
+              } catch {
+                if (sheet.href) {
+                  const link = win.document.createElement('link');
+                  link.rel = 'stylesheet';
+                  link.href = sheet.href;
+                  win.document.head.appendChild(link);
+                }
+              }
             }
+
+            const root = win.document.createElement('div');
+            root.className = 'pip-doc-root';
+            win.document.body.innerHTML = '';
+            win.document.body.appendChild(root);
+
+            win.addEventListener('pagehide', () => {
+              setPipWindow(null);
+              setPipContainer(null);
+              setPipKind('none');
+            });
+
+            setPipWindow(win);
+            setPipContainer(root);
+            setPipKind('document');
+            return;
           } catch {
-            if (sheet.href) {
-              const link = win.document.createElement('link');
-              link.rel = 'stylesheet';
-              link.href = sheet.href;
-              win.document.head.appendChild(link);
+            if (silent) return;
+            // Fall through to Video PiP
+          }
+        }
+
+        // 2. Safari / iPadOS: Synchronous Video PiP on pre-warmed Canvas stream
+        const pipVideo = pipVideoRef.current as WebKitVideoElement | null;
+        if (pipVideo) {
+          primeCanvasVideo();
+
+          if (pipVideo.readyState >= 1) {
+            // Unmute inside user gesture so singing-bowl chimes play through the PiP video's OS audio session
+            pipVideo.muted = false;
+            pipVideo.volume = 1;
+            const res = await tryEnterVideoPiPSync(pipVideo);
+            if (res.ok) {
+              setVideoPiPAudioActive(true);
+              setPipKind('video');
+              // Safari often pauses other <video> elements when one enters PiP — immediately resume camera!
+              const nudgeCamera = () => {
+                const cam = cameraVideoRef?.current;
+                if (cam && cam.paused && cam.srcObject) {
+                  cam.play().catch(() => {});
+                }
+              };
+              window.setTimeout(nudgeCamera, 60);
+              window.setTimeout(nudgeCamera, 300);
+              return;
+            } else {
+              pipVideo.muted = true;
+              setVideoPiPAudioActive(false);
             }
           }
         }
 
-        const root = win.document.createElement('div');
-        root.className = 'pip-doc-root';
-        win.document.body.innerHTML = '';
-        win.document.body.appendChild(root);
-
-        win.addEventListener('pagehide', () => {
-          setPipWindow(null);
-          setPipContainer(null);
-          setPipKind('none');
-        });
-
-        setPipWindow(win);
-        setPipContainer(root);
-        setPipKind('document');
-        return;
-      } catch {
-        // Fall through to Video PiP
-      }
-    }
-
-    // 2. Safari / iPadOS: Synchronous Video PiP on pre-warmed Canvas stream
-    const pipVideo = pipVideoRef.current as WebKitVideoElement | null;
-    if (pipVideo) {
-      primeCanvasVideo();
-
-      if (pipVideo.readyState >= 1) {
-        // Unmute inside user gesture so singing-bowl chimes play through the PiP video's OS audio session
-        pipVideo.muted = false;
-        pipVideo.volume = 1;
-        const res = await tryEnterVideoPiPSync(pipVideo);
-        if (res.ok) {
-          setVideoPiPAudioActive(true);
-          setPipKind('video');
-          // Safari often pauses other <video> elements when one enters PiP — immediately resume camera!
-          const nudgeCamera = () => {
-            const cam = cameraVideoRef?.current;
-            if (cam && cam.paused && cam.srcObject) {
-              cam.play().catch(() => {});
-            }
-          };
-          window.setTimeout(nudgeCamera, 60);
-          window.setTimeout(nudgeCamera, 300);
-          return;
-        } else {
-          pipVideo.muted = true;
-          setVideoPiPAudioActive(false);
+        // 3. Fallback for iPadOS builds that disallow canvas.captureStream PiP:
+        const camVideo = cameraVideoRef?.current as WebKitVideoElement | null;
+        if (camVideo && camVideo.readyState >= 1 && camVideo.srcObject) {
+          const camRes = await tryEnterVideoPiPSync(camVideo);
+          if (camRes.ok) {
+            setPipKind('video');
+            return;
+          }
         }
+
+        if (silent) return;
+
+        // 4. If canvas video was cold (readyState === 0 on first tap), prompt second tap
+        if (pipVideo && pipVideo.readyState === 0) {
+          primeCanvasVideo();
+          setPipError(
+            'Picture-in-Picture is now warmed up — tap "Float PiP" one more time to pop it out.'
+          );
+          return;
+        }
+
+        const ua = navigator.userAgent;
+        const isCriOS = /CriOS/i.test(ua);
+        if (isCriOS) {
+          setPipError(
+            'Chrome on iPadOS restricts programmatic web PiP. Open Still in Safari on iPad (or use iPad Split View / Slide Over) to float Still beside other apps.'
+          );
+        } else {
+          setPipError(
+            'This browser blocked floating PiP. On iPadOS Safari, make sure Settings → Multitasking & Gestures → Picture in Picture is on, or start a session first and try again (Split View / Slide Over also keeps Still visible).'
+          );
+        }
+      } finally {
+        openingRef.current = false;
       }
-    }
+    },
+    [cameraVideoRef, primeCanvasVideo, tryEnterVideoPiPSync]
+  );
 
-    // 3. Fallback for iPadOS builds that disallow canvas.captureStream PiP:
-    const camVideo = cameraVideoRef?.current as WebKitVideoElement | null;
-    if (camVideo && camVideo.readyState >= 1 && camVideo.srcObject) {
-      const camRes = await tryEnterVideoPiPSync(camVideo);
-      if (camRes.ok) {
-        setPipKind('video');
-        return;
-      }
-    }
-
-    // 4. If canvas video was cold (readyState === 0 on first tap), prompt second tap
-    if (pipVideo && pipVideo.readyState === 0) {
-      primeCanvasVideo();
-      setPipError(
-        'Picture-in-Picture is now warmed up — tap "Float PiP" one more time to pop it out.'
-      );
-      return;
-    }
-
-    const ua = navigator.userAgent;
-    const isCriOS = /CriOS/i.test(ua);
-    if (isCriOS) {
-      setPipError(
-        'Chrome on iPadOS restricts programmatic web PiP. Open Still in Safari on iPad (or use iPad Split View / Slide Over) to float Still beside other apps.'
-      );
-    } else {
-      setPipError(
-        'This browser blocked floating PiP. On iPadOS Safari, make sure Settings → Multitasking & Gestures → Picture in Picture is on, or start a session first and try again (Split View / Slide Over also keeps Still visible).'
-      );
-    }
-  }, [cameraVideoRef, primeCanvasVideo, tryEnterVideoPiPSync]);
+  const openPiPRef = useRef(openPiP);
+  openPiPRef.current = openPiP;
 
   const togglePiP = useCallback(async () => {
     if (pipKind !== 'none') {
@@ -573,8 +600,47 @@ export function usePictureInPicture(
     }
   }, [closePiP, openPiP, pipKind]);
 
+  // Query Chrome's per-site "Automatic picture-in-picture" permission if supported
+  useEffect(() => {
+    let active = true;
+    let statusObj: PermissionStatus | null = null;
+
+    const queryPerm = async () => {
+      try {
+        if (!navigator.permissions?.query) return;
+        const result = await navigator.permissions.query({
+          name: 'automatic-picture-in-picture' as PermissionName,
+        });
+        if (!active) return;
+        statusObj = result;
+        setAutoPipPermission(result.state as AutoPipPermissionState);
+        result.onchange = () => {
+          if (active) {
+            setAutoPipPermission(result.state as AutoPipPermissionState);
+          }
+        };
+      } catch {
+        // Browser does not expose automatic-picture-in-picture permission query
+      }
+    };
+
+    void queryPerm();
+    return () => {
+      active = false;
+      if (statusObj) {
+        statusObj.onchange = null;
+      }
+    };
+  }, []);
+
   // Automatic Picture-in-Picture on tab switch (Desktop Chrome 120+ / Edge)
-  // Uses official MediaSession 'enterpictureinpicture' action handler while camera session is running.
+  // Registered early as soon as session starts and kept stable across PiP state changes.
+  const isSessionActive =
+    canvasState.status === 'requesting-camera' ||
+    canvasState.status === 'loading-models' ||
+    canvasState.status === 'choosing-camera' ||
+    canvasState.status === 'running';
+
   useEffect(() => {
     const ms = typeof navigator !== 'undefined' ? navigator.mediaSession : undefined;
     if (!ms || typeof ms.setActionHandler !== 'function') {
@@ -582,13 +648,35 @@ export function usePictureInPicture(
       return;
     }
 
-    const canRegister = canvasState.status === 'running' && canvasState.autoPipOnTabSwitch;
+    const msExtended = ms as MediaSession & {
+      setCameraActive?: (active: boolean) => void;
+    };
+
+    const canRegister = isSessionActive && canvasState.autoPipOnTabSwitch;
+
+    try {
+      if (isSessionActive) {
+        ms.playbackState = 'playing';
+        if (typeof MediaMetadata !== 'undefined') {
+          ms.metadata = new MediaMetadata({
+            title: 'Still',
+            artist: 'Watching gently · 100% local',
+          });
+        }
+        msExtended.setCameraActive?.(true);
+      } else {
+        ms.playbackState = 'none';
+        msExtended.setCameraActive?.(false);
+      }
+    } catch {
+      // ignore optional MediaSession metadata/camera hooks
+    }
 
     try {
       // Feature-probe support cleanly (Safari throws TypeError on unknown action 'enterpictureinpicture')
       if (canRegister) {
         ms.setActionHandler('enterpictureinpicture' as MediaSessionAction, () => {
-          void openPiP();
+          void openPiPRef.current({ silent: true });
         });
         setAutoPipSupported(true);
       } else {
@@ -602,11 +690,32 @@ export function usePictureInPicture(
     return () => {
       try {
         ms.setActionHandler('enterpictureinpicture' as MediaSessionAction, null);
+        ms.playbackState = 'none';
+        msExtended.setCameraActive?.(false);
       } catch {
         // ignore
       }
     };
-  }, [canvasState.status, canvasState.autoPipOnTabSwitch, openPiP]);
+  }, [isSessionActive, canvasState.autoPipOnTabSwitch]);
+
+  // Bonus: if the user clicks into another desktop app within Chrome's brief user-activation window
+  // right after interacting with a running session, pop out the floating mini-window automatically.
+  useEffect(() => {
+    if (canvasState.status !== 'running' || !canvasState.autoPipOnTabSwitch || pipKind !== 'none') {
+      return;
+    }
+
+    const onWindowBlur = () => {
+      if (document.visibilityState !== 'visible') return;
+      const ua = (navigator as Navigator & { userActivation?: { isActive: boolean } })
+        .userActivation;
+      if (!ua?.isActive) return;
+      void openPiPRef.current({ silent: true });
+    };
+
+    window.addEventListener('blur', onWindowBlur);
+    return () => window.removeEventListener('blur', onWindowBlur);
+  }, [canvasState.status, canvasState.autoPipOnTabSwitch, pipKind]);
 
   useEffect(() => {
     return () => {
@@ -624,6 +733,7 @@ export function usePictureInPicture(
     pipError,
     isSupported,
     autoPipSupported,
+    autoPipPermission,
     canvasRef,
     pipVideoRef,
     primeCanvasVideo,

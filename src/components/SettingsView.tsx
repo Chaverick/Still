@@ -1,10 +1,13 @@
-import type { StillSettings, ThemeMode } from '../types';
+import type { CameraDeviceOption, StillSettings, ThemeMode } from '../types';
 
 interface SettingsViewProps {
   settings: StillSettings;
   theme: ThemeMode;
   autoPipSupported: boolean;
+  autoPipPermission: 'granted' | 'prompt' | 'denied' | 'unknown';
+  availableCameras: CameraDeviceOption[];
   onUpdateSettings: (patch: Partial<StillSettings>) => void;
+  onSelectCamera: (deviceId: string) => void;
   onToggleTheme: () => void;
   onTestStage1: () => void;
   onTestStage2: () => void;
@@ -14,7 +17,10 @@ export function SettingsView({
   settings,
   theme,
   autoPipSupported,
+  autoPipPermission,
+  availableCameras,
   onUpdateSettings,
+  onSelectCamera,
   onToggleTheme,
   onTestStage1,
   onTestStage2,
@@ -26,10 +32,44 @@ export function SettingsView({
       <header className="page-intro">
         <h1 className="page-title">Settings</h1>
         <p className="page-lead">
-          Personalize how Still speaks to you, tune gentle cues, and configure your floating
-          mini-window. Everything stays saved locally in this browser.
+          Personalize how Still speaks to you, choose your camera, tune gentle cues, and configure
+          your floating mini-window. Everything stays saved locally in this browser.
         </p>
       </header>
+
+      {/* Camera Selection */}
+      <section className="editorial-section" aria-label="Camera selection">
+        <div className="section-head-row">
+          <h2 className="section-heading">Camera</h2>
+          <span className="section-meta">Auto picks front-facing</span>
+        </div>
+
+        <div className="settings-card">
+          <div className="camera-picker-row">
+            <label htmlFor="select-settings-camera" className="slider-label">
+              Active camera
+            </label>
+            <select
+              id="select-settings-camera"
+              className="editorial-select"
+              value={settings.selectedCameraId}
+              onChange={(e) => onSelectCamera(e.target.value)}
+            >
+              <option value="">Automatic (scans connected cameras &amp; picks front view)</option>
+              {availableCameras.map((cam) => (
+                <option key={cam.deviceId} value={cam.deviceId}>
+                  {cam.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          <p className="settings-preview-note">
+            In Automatic mode, Still briefly checks all connected cameras when you begin and picks
+            the one straight in front of your face (such as an external Logitech desk webcam instead
+            of a side laptop camera). If unplugged, it falls back automatically.
+          </p>
+        </div>
+      </section>
 
       {/* Personalization: Your name */}
       <section className="editorial-section" aria-label="Personalization">
@@ -207,9 +247,11 @@ export function SettingsView({
             <div className="toggle-copy">
               <div className="toggle-title">Auto-float when switching tabs</div>
               <p className="toggle-desc">
-                {autoPipSupported
-                  ? 'Supported in this browser: when a session is running and you switch to another tab, Still automatically pops out into the floating mini-window (and closes when you return).'
-                  : 'Supported automatically on Desktop Chrome & Edge when you switch tabs. On iPadOS and Safari, Apple requires a single tap on "Float mini-window" for privacy.'}
+                {autoPipPermission === 'denied'
+                  ? 'Currently blocked in Chrome site settings. Click the tune icon left of the address bar and allow "Automatic picture-in-picture".'
+                  : autoPipSupported
+                    ? 'When a session is running and you switch browser tabs, Still pops out automatically. To stay on top of other desktop apps (like Slack or Notes), click "Float mini-window" once.'
+                    : 'Supported automatically on Desktop Chrome & Edge when you switch tabs. On iPadOS and Safari, Apple requires a single tap on "Float mini-window" for privacy.'}
               </p>
             </div>
             <button

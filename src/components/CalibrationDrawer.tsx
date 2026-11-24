@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { ZONE_OPTIONS } from '../lib/storage';
 import type {
+  CameraDeviceOption,
   DetectionZoneId,
   FrameGeometry,
   Point2D,
@@ -13,7 +14,9 @@ interface CalibrationDrawerProps {
   expanded: boolean;
   onToggleExpand: () => void;
   settings: StillSettings;
+  availableCameras: CameraDeviceOption[];
   onUpdateSettings: (patch: Partial<StillSettings>) => void;
+  onSelectCamera: (deviceId: string) => void;
   videoRef: React.RefObject<HTMLVideoElement | null>;
   frameGeometry: FrameGeometry | null;
   dwellSec: number;
@@ -43,7 +46,9 @@ export function CalibrationDrawer({
   expanded,
   onToggleExpand,
   settings,
+  availableCameras,
   onUpdateSettings,
+  onSelectCamera,
   videoRef,
   frameGeometry,
   dwellSec,
@@ -288,13 +293,56 @@ export function CalibrationDrawer({
                 ? 'Start session to calibrate'
                 : diagnostics.cameraState !== 'live'
                   ? 'Camera paused by OS'
-                  : diagnostics.faceState === 'detected'
-                    ? `${diagnostics.sideAngle ? 'Side angle · boosted' : 'Face locked'} · ${diagnostics.handsCount} ${diagnostics.handsCount === 1 ? 'hand' : 'hands'}`
-                    : diagnostics.faceState === 'cached'
-                      ? 'Occlusion cache active (up to 5s)'
-                      : 'Face out of frame'}
+                  : frameGeometry?.filteredReason === 'ear'
+                    ? 'Ignoring ear touch'
+                    : frameGeometry?.filteredReason === 'drinking'
+                      ? 'Ignoring drink / glass'
+                      : frameGeometry?.filteredReason === 'foreground'
+                        ? 'Hand in foreground (ignored)'
+                        : diagnostics.faceState === 'detected'
+                          ? `${diagnostics.sideAngle ? 'Side angle · boosted' : 'Face locked'} · ${diagnostics.handsCount} ${diagnostics.handsCount === 1 ? 'hand' : 'hands'}`
+                          : diagnostics.faceState === 'cached'
+                            ? 'Occlusion cache active (up to 5s)'
+                            : 'Face out of frame'}
             </span>
           </div>
+
+          {/* Camera picker (auto picks front-facing desk camera over side laptop camera) */}
+          {availableCameras.length > 0 && (
+            <div className="camera-picker-row">
+              <div className="slider-head">
+                <label htmlFor="select-cal-camera" className="slider-label">
+                  Camera
+                </label>
+                {sessionRunning && availableCameras.length >= 2 ? (
+                  <button
+                    type="button"
+                    className="text-link-btn"
+                    onClick={() => onSelectCamera('')}
+                  >
+                    Re-scan front camera
+                  </button>
+                ) : (
+                  <span className="slider-value">
+                    {diagnostics.cameraLabel || 'Auto front-facing'}
+                  </span>
+                )}
+              </div>
+              <select
+                id="select-cal-camera"
+                className="editorial-select"
+                value={settings.selectedCameraId}
+                onChange={(e) => onSelectCamera(e.target.value)}
+              >
+                <option value="">Automatic (pick camera straight in front of face)</option>
+                {availableCameras.map((cam) => (
+                  <option key={cam.deviceId} value={cam.deviceId}>
+                    {cam.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
 
           <div className="preview-frame">
             <canvas
@@ -435,6 +483,30 @@ export function CalibrationDrawer({
                 }
               />
             </label>
+          </div>
+
+          {/* High-Recall Ear-Touch & Drinking Precision Guard */}
+          <div className="pinch-filter-row">
+            <div className="toggle-copy">
+              <span className="slider-label">Ignore ear touches &amp; drinking (recommended)</span>
+              <span className="toggle-desc">
+                Uses hand-to-face depth scale, ear boundaries, and sipping mouth cues to filter
+                out glasses and ear touches while keeping full eyebrow recall.
+              </span>
+            </div>
+            <button
+              type="button"
+              id="toggle-smart-guard"
+              role="switch"
+              aria-checked={settings.smartFalseAlarmGuard}
+              aria-label="Toggle ear-touch and drinking false-alarm guard"
+              className={`switch ${settings.smartFalseAlarmGuard ? 'switch--on' : ''}`}
+              onClick={() =>
+                onUpdateSettings({ smartFalseAlarmGuard: !settings.smartFalseAlarmGuard })
+              }
+            >
+              <span className="switch-thumb" />
+            </button>
           </div>
 
           {/* Pinch-Aware Filter Toggle */}

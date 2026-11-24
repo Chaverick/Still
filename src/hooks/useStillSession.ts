@@ -3,6 +3,7 @@ import { playSingingBowl, unlockAudio } from '../lib/audio';
 import { checkModelsCached, LocalVisionEngine } from '../lib/vision';
 import { WakeLockController } from '../lib/wakeLock';
 import type {
+  CameraDeviceOption,
   EngineStatus,
   FrameGeometry,
   Stage1AutoCatch,
@@ -69,6 +70,7 @@ export function useStillSession({
   const [welcomeBack, setWelcomeBack] = useState<WelcomeBackPrompt | null>(null);
   const [whisper, setWhisper] = useState<WhisperToast | null>(null);
   const [frameGeometry, setFrameGeometry] = useState<FrameGeometry | null>(null);
+  const [availableCameras, setAvailableCameras] = useState<CameraDeviceOption[]>([]);
   const [diagnostics, setDiagnostics] = useState<VisionDiagnostics>({
     delegate: null,
     fps: 0,
@@ -76,6 +78,7 @@ export function useStillSession({
     sideAngle: false,
     cameraState: 'ended',
     cameraStalled: false,
+    cameraLabel: undefined,
     detectCount: 0,
     handsCount: 0,
     modelsCached: false,
@@ -151,6 +154,31 @@ export function useStillSession({
       wakeLockRef.current = null;
     };
   }, []);
+
+  const refreshCameras = useCallback(async () => {
+    if (!navigator.mediaDevices?.enumerateDevices) return;
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const cams = devices
+        .filter((d) => d.kind === 'videoinput')
+        .map((d, idx) => ({
+          deviceId: d.deviceId,
+          label: d.label || `Camera ${idx + 1}`,
+        }));
+      setAvailableCameras(cams);
+    } catch {
+      // ignore enumeration errors before permission
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshCameras();
+    const md = navigator.mediaDevices;
+    if (md?.addEventListener) {
+      md.addEventListener('devicechange', refreshCameras);
+      return () => md.removeEventListener('devicechange', refreshCameras);
+    }
+  }, [refreshCameras]);
 
   const stopCameraTracks = useCallback(() => {
     const video = videoRef.current;
@@ -282,6 +310,7 @@ export function useStillSession({
         zoneScale: s.zoneScale,
         activeZones: s.activeZones,
         pinchFilterEnabled: s.pinchFilterEnabled,
+        smartFalseAlarmGuard: s.smartFalseAlarmGuard,
       },
       now
     );
@@ -487,146 +516,319 @@ export function useStillSession({
    * Request getUserMedia and unlock Web Audio IMMEDIATELY inside the user tap gesture
    * BEFORE awaiting MediaPipe WASM / .task model loading.
    */
-  const startSession = useCallback(async () => {
-    if (runningRef.current || status === 'requesting-camera' || status === 'loading-models') {
-      return;
-    }
+  const startSession = useCallback(
+    async (overrideCameraId?: string) => {
+      if (
+        runningRef.current ||
+        status === 'requesting-camera' ||
+        status === 'loading-models' ||
+        status === 'choosing-camera'
+      ) {
+        return;
+      }
 
-    // 1. Unlock Web Audio synchronously inside user tap
-    unlockAudio();
-    setErrorMessage(null);
-    setStatus('requesting-camera');
+      // 1. Unlock Web Audio synchronously inside user tap
+      unlockAudio();
+      setErrorMessage(null);
+      setStatus('requesting-camera');
 
-    if (!navigator.mediaDevices?.getUserMedia) {
-      setStatus('error');
-      setErrorMessage(
-        'Camera access is unavailable in this browser context. Open Still over HTTPS in Safari or Chrome.'
-      );
-      return;
-    }
+      if (!navigator.mediaDevices?.getUserMedia) {
+        setStatus('error');
+        setErrorMessage(
+          'Camera access is unavailable in this browser context. Open Still over HTTPS in Safari or Chrome.'
+        );
+        return;
+      }
 
-    let stream: MediaStream;
-    try {
-      // 2. Request getUserMedia immediately on tap BEFORE loading models
-      stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: { ideal: 'user' },
-          width: { ideal: 640 },
-          height: { ideal: 480 },
-          frameRate: { ideal: 15, max: 30 },
-        },
+      const desiredDeviceId =
+        overrideCameraId !== undefined
+          ? overrideCameraId
+          : settingsRef.current.selectedCameraId;
+
+      const buildConstraints = (deviceId: string): MediaStreamConstraints => ({
+        video: deviceId
+          ? {
+              deviceId: { exact: deviceId },
+              width: { ideal: 640 },
+              height: { ideal: 480 },
+              frameRate: { ideal: 15, max: 30 },
+            }
+          : {
+              facingMode: { ideal: 'user' },
+              width: { ideal: 640 },
+              height: { ideal: 480 },
+              frameRate: { ideal: 15, max: 30 },
+            },
         audio: false,
       });
-    } catch (err) {
-      const msg =
-        err instanceof DOMException && err.name === 'NotAllowedError'
-          ? 'Camera permission was declined. Enable camera access in Safari settings to watch locally.'
-          : 'Could not open the front camera. Make sure no other app is holding it exclusively.';
-      setStatus('error');
-      setErrorMessage(msg);
-      return;
-    }
 
-    streamRef.current = stream;
-    const videoTrack = stream.getVideoTracks()[0];
-    if (videoTrack) {
-      setDiagnostics((d) => ({
-        ...d,
-        cameraState: videoTrack.muted ? 'muted' : 'live',
-        cameraStalled: false,
-      }));
-      videoTrack.onmute = () => {
-        setDiagnostics((d) => ({ ...d, cameraState: 'muted', cameraStalled: true, fps: 0 }));
-      };
-      videoTrack.onunmute = () => {
-        lastFrameAdvanceMsRef.current = performance.now();
-        setDiagnostics((d) => ({ ...d, cameraState: 'live', cameraStalled: false }));
-      };
-      videoTrack.onended = () => {
-        setDiagnostics((d) => ({ ...d, cameraState: 'ended', cameraStalled: true, fps: 0 }));
-      };
-    }
-
-    const video = videoRef.current;
-    if (video) {
-      video.srcObject = stream;
-      video.muted = true;
-      video.playsInline = true;
-      // Auto-resume immediately if Safari pauses the camera video when PiP opens!
-      video.onpause = () => {
-        if (runningRef.current) {
-          window.setTimeout(() => {
-            if (runningRef.current && video.paused) {
-              video.play().catch(() => {});
-            }
-          }, 60);
+      const stopStreamQuietly = (s: MediaStream | null) => {
+        if (!s) return;
+        for (const t of s.getTracks()) {
+          try {
+            t.stop();
+          } catch {
+            // ignore
+          }
         }
       };
-      try {
-        await video.play();
-      } catch {
-        await new Promise<void>((resolve) => {
-          const onMeta = () => {
-            video.removeEventListener('loadedmetadata', onMeta);
-            video.play().catch(() => {}).finally(resolve);
-          };
-          video.addEventListener('loadedmetadata', onMeta);
-        });
-      }
-    }
 
-    // 3. Request Screen Wake Lock
-    void wakeLockRef.current?.enable();
-
-    // 4. Load local MediaPipe FaceLandmarker + HandLandmarker (GPU -> CPU fallback)
-    setStatus('loading-models');
-    try {
-      if (!engineRef.current) {
-        engineRef.current = new LocalVisionEngine();
-      }
-      const delegate = await engineRef.current.init();
-      const cached = await checkModelsCached();
-      setDiagnostics((d) => ({
-        ...d,
-        delegate,
-        modelsCached: cached,
-      }));
-    } catch (err) {
-      stopCameraTracks();
-      void wakeLockRef.current?.disable();
-      setStatus('error');
-      setErrorMessage(
-        err instanceof Error
-          ? `Local vision models could not initialize: ${err.message}`
-          : 'Local vision models could not initialize in this browser.'
-      );
-      return;
-    }
-
-    // 5. Start 4 FPS detection loop (driven by rAF + requestVideoFrameCallback if supported)
-    runningRef.current = true;
-    lastDetectMsRef.current = 0;
-    lastVideoTimeRef.current = -1;
-    lastFrameAdvanceMsRef.current = performance.now();
-    detectCountRef.current = 0;
-    lastFaceSeenMsRef.current = Date.now();
-    awaySinceMsRef.current = null;
-    fpsSamplesRef.current = [];
-    resetDwellState();
-    setStatus('running');
-    rafRef.current = requestAnimationFrame(runLoop);
-
-    // Attach requestVideoFrameCallback on camera video so real camera frames directly drive detection
-    if (video && typeof video.requestVideoFrameCallback === 'function') {
-      const onVideoFrame = () => {
-        if (!runningRef.current) return;
-        lastFrameAdvanceMsRef.current = performance.now();
-        stepDetection();
-        rvfcRef.current = video.requestVideoFrameCallback?.(onVideoFrame) ?? null;
+      const attachAndWaitForFrame = async (
+        vid: HTMLVideoElement,
+        s: MediaStream,
+        timeoutMs = 1000
+      ): Promise<boolean> => {
+        vid.srcObject = s;
+        vid.muted = true;
+        vid.playsInline = true;
+        try {
+          await vid.play();
+        } catch {
+          // ignore autoplay race; check readyState loop below
+        }
+        const start = performance.now();
+        while (performance.now() - start < timeoutMs) {
+          if (vid.readyState >= 2 && vid.videoWidth > 0 && vid.videoHeight > 0) {
+            return true;
+          }
+          await new Promise((r) => window.setTimeout(r, 60));
+        }
+        return vid.readyState >= 2 && vid.videoWidth > 0;
       };
-      rvfcRef.current = video.requestVideoFrameCallback(onVideoFrame);
-    }
-  }, [resetDwellState, runLoop, status, stepDetection, stopCameraTracks]);
+
+      const scoreVideoFrontFacing = async (
+        eng: LocalVisionEngine,
+        vid: HTMLVideoElement
+      ): Promise<{ faceFound: boolean; frontScore: number; sideAngle: boolean }> => {
+        let best = { faceFound: false, frontScore: -1, sideAngle: true };
+        for (let i = 0; i < 3; i++) {
+          const res = eng.evaluateFrontFacingScore(vid, performance.now());
+          if (res.faceFound && res.frontScore > best.frontScore) {
+            best = { faceFound: true, frontScore: res.frontScore, sideAngle: res.sideAngle };
+          }
+          if (i < 2) {
+            await new Promise((r) => window.setTimeout(r, 95));
+          }
+        }
+        return best;
+      };
+
+      let stream: MediaStream;
+      try {
+        // 2. Request getUserMedia immediately on tap BEFORE loading models
+        stream = await navigator.mediaDevices.getUserMedia(buildConstraints(desiredDeviceId));
+      } catch (err) {
+        if (desiredDeviceId) {
+          try {
+            stream = await navigator.mediaDevices.getUserMedia(buildConstraints(''));
+          } catch (fallbackErr) {
+            const msg =
+              fallbackErr instanceof DOMException && fallbackErr.name === 'NotAllowedError'
+                ? 'Camera permission was declined. Enable camera access in browser settings to watch locally.'
+                : 'Could not open the front camera. Make sure no other app is holding it exclusively.';
+            setStatus('error');
+            setErrorMessage(msg);
+            return;
+          }
+        } else {
+          const msg =
+            err instanceof DOMException && err.name === 'NotAllowedError'
+              ? 'Camera permission was declined. Enable camera access in browser settings to watch locally.'
+              : 'Could not open the front camera. Make sure no other app is holding it exclusively.';
+          setStatus('error');
+          setErrorMessage(msg);
+          return;
+        }
+      }
+
+      void refreshCameras();
+
+      const video = videoRef.current;
+      if (video) {
+        await attachAndWaitForFrame(video, stream, 1500);
+      }
+
+      // 3. Request Screen Wake Lock
+      void wakeLockRef.current?.enable();
+
+      // 4. Load local MediaPipe FaceLandmarker + HandLandmarker (GPU -> CPU fallback)
+      setStatus('loading-models');
+      try {
+        if (!engineRef.current) {
+          engineRef.current = new LocalVisionEngine();
+        }
+        const delegate = await engineRef.current.init();
+        const cached = await checkModelsCached();
+        setDiagnostics((d) => ({
+          ...d,
+          delegate,
+          modelsCached: cached,
+        }));
+      } catch (err) {
+        stopStreamQuietly(stream);
+        stopCameraTracks();
+        void wakeLockRef.current?.disable();
+        setStatus('error');
+        setErrorMessage(
+          err instanceof Error
+            ? `Local vision models could not initialize: ${err.message}`
+            : 'Local vision models could not initialize in this browser.'
+        );
+        return;
+      }
+
+      // 5. Automatic front-facing multi-camera selection:
+      // When in Automatic mode and 2+ physical cameras are connected (e.g. side MacBook + front Logitech),
+      // inspect each camera briefly and choose the one most directly in front of the user's face.
+      let autoPickedNotice: string | null = null;
+      if (!desiredDeviceId && video && engineRef.current && navigator.mediaDevices?.enumerateDevices) {
+        try {
+          const devices = await navigator.mediaDevices.enumerateDevices();
+          const allCams = devices.filter((d) => d.kind === 'videoinput' && d.deviceId);
+          const isVirtualOrDesk = (label: string) =>
+            /desk view|virtual|obs|snap camera|ndi|mmhmm|loom/i.test(label);
+          const physicalCams = allCams.filter((c) => !isVirtualOrDesk(c.label || ''));
+          const candidates = (physicalCams.length > 0 ? physicalCams : allCams).slice(0, 4);
+
+          if (candidates.length >= 2) {
+            setStatus('choosing-camera');
+            const initialTrack = stream.getVideoTracks()[0];
+            const initialDeviceId = initialTrack?.getSettings?.().deviceId || '';
+            const initialLabel = initialTrack?.label || 'Camera 1';
+
+            const initialEval = await scoreVideoFrontFacing(engineRef.current, video);
+            let bestStream: MediaStream = stream;
+            let bestScore = initialEval.faceFound ? initialEval.frontScore : -1;
+            let bestLabel = initialLabel;
+
+            for (const cam of candidates) {
+              if (cam.deviceId === initialDeviceId) continue;
+              let probeStream: MediaStream | null = null;
+              try {
+                probeStream = await navigator.mediaDevices.getUserMedia(
+                  buildConstraints(cam.deviceId)
+                );
+                const ready = await attachAndWaitForFrame(video, probeStream, 900);
+                if (ready) {
+                  const evalRes = await scoreVideoFrontFacing(engineRef.current, video);
+                  const score = evalRes.faceFound ? evalRes.frontScore : -1;
+                  if (score > bestScore + 2) {
+                    stopStreamQuietly(bestStream);
+                    bestStream = probeStream;
+                    bestScore = score;
+                    bestLabel =
+                      probeStream.getVideoTracks()[0]?.label || cam.label || 'Front camera';
+                    probeStream = null;
+                  }
+                }
+              } catch {
+                // Skip busy or sleeping cameras
+              } finally {
+                if (probeStream) {
+                  stopStreamQuietly(probeStream);
+                }
+              }
+            }
+
+            stream = bestStream;
+            await attachAndWaitForFrame(video, stream, 900);
+            if (bestScore >= 0) {
+              autoPickedNotice = `Using ${bestLabel} · best front view of ${candidates.length} cameras`;
+            }
+          }
+        } catch {
+          // Proceed gracefully with open stream
+        }
+      }
+
+      streamRef.current = stream;
+      const videoTrack = stream.getVideoTracks()[0];
+      if (videoTrack) {
+        setDiagnostics((d) => ({
+          ...d,
+          cameraState: videoTrack.muted ? 'muted' : 'live',
+          cameraStalled: false,
+          cameraLabel: videoTrack.label || 'Front camera',
+        }));
+        videoTrack.onmute = () => {
+          setDiagnostics((d) => ({ ...d, cameraState: 'muted', cameraStalled: true, fps: 0 }));
+        };
+        videoTrack.onunmute = () => {
+          lastFrameAdvanceMsRef.current = performance.now();
+          setDiagnostics((d) => ({ ...d, cameraState: 'live', cameraStalled: false }));
+        };
+        videoTrack.onended = () => {
+          setDiagnostics((d) => ({ ...d, cameraState: 'ended', cameraStalled: true, fps: 0 }));
+        };
+      }
+
+      if (video) {
+        video.srcObject = stream;
+        video.muted = true;
+        video.playsInline = true;
+        // Auto-resume immediately if Safari pauses the camera video when PiP opens!
+        video.onpause = () => {
+          if (runningRef.current) {
+            window.setTimeout(() => {
+              if (runningRef.current && video.paused) {
+                video.play().catch(() => {});
+              }
+            }, 60);
+          }
+        };
+        try {
+          await video.play();
+        } catch {
+          await new Promise<void>((resolve) => {
+            const onMeta = () => {
+              video.removeEventListener('loadedmetadata', onMeta);
+              video.play().catch(() => {}).finally(resolve);
+            };
+            video.addEventListener('loadedmetadata', onMeta);
+          });
+        }
+      }
+
+      // 6. Start 4 FPS detection loop (driven by rAF + requestVideoFrameCallback if supported)
+      runningRef.current = true;
+      lastDetectMsRef.current = 0;
+      lastVideoTimeRef.current = -1;
+      lastFrameAdvanceMsRef.current = performance.now();
+      detectCountRef.current = 0;
+      lastFaceSeenMsRef.current = Date.now();
+      awaySinceMsRef.current = null;
+      fpsSamplesRef.current = [];
+      resetDwellState();
+      setStatus('running');
+      if (autoPickedNotice) {
+        showWhisper(autoPickedNotice, undefined, 4500);
+      }
+      rafRef.current = requestAnimationFrame(runLoop);
+
+      // Attach requestVideoFrameCallback on camera video so real camera frames directly drive detection
+      if (video && typeof video.requestVideoFrameCallback === 'function') {
+        const onVideoFrame = () => {
+          if (!runningRef.current) return;
+          lastFrameAdvanceMsRef.current = performance.now();
+          stepDetection();
+          rvfcRef.current = video.requestVideoFrameCallback?.(onVideoFrame) ?? null;
+        };
+        rvfcRef.current = video.requestVideoFrameCallback(onVideoFrame);
+      }
+    },
+    [refreshCameras, resetDwellState, runLoop, showWhisper, status, stepDetection, stopCameraTracks]
+  );
+
+  const switchCamera = useCallback(
+    async (deviceId: string) => {
+      if (!runningRef.current) return;
+      stopSession();
+      window.setTimeout(() => {
+        void startSession(deviceId);
+      }, 120);
+    },
+    [startSession, stopSession]
+  );
 
   // Cumulative calm time ticker (ticks every 1s while actively running & face present recently)
   useEffect(() => {
@@ -734,9 +936,11 @@ export function useStillSession({
     welcomeBack,
     whisper,
     frameGeometry,
+    availableCameras,
     diagnostics,
     startSession,
     stopSession,
+    switchCamera,
     triggerTestCue,
     cancelStage1FalseAlarm,
     dismissWelcomeBack,

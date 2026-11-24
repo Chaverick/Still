@@ -1,5 +1,6 @@
 import { formatDuration } from '../lib/storage';
 import type {
+  CameraDeviceOption,
   DaySummary,
   EngineStatus,
   FrameGeometry,
@@ -19,7 +20,9 @@ interface TodayViewProps {
   today: DaySummary;
   totalCalmSeconds: number;
   settings: StillSettings;
+  availableCameras: CameraDeviceOption[];
   onUpdateSettings: (patch: Partial<StillSettings>) => void;
+  onSelectCamera: (deviceId: string) => void;
   onStart: () => void;
   onStop: () => void;
   onTestStage1: () => void;
@@ -27,6 +30,7 @@ interface TodayViewProps {
   onOpenSettings: () => void;
   pipSupported: boolean;
   autoPipSupported: boolean;
+  autoPipPermission: 'granted' | 'prompt' | 'denied' | 'unknown';
   pipKind: PiPKind;
   pipError: string | null;
   onTogglePiP: () => void;
@@ -56,7 +60,9 @@ export function TodayView({
   today,
   totalCalmSeconds,
   settings,
+  availableCameras,
   onUpdateSettings,
+  onSelectCamera,
   onStart,
   onStop,
   onTestStage1,
@@ -64,6 +70,7 @@ export function TodayView({
   onOpenSettings,
   pipSupported,
   autoPipSupported,
+  autoPipPermission,
   pipKind,
   pipError,
   onTogglePiP,
@@ -87,13 +94,17 @@ export function TodayView({
   diagnostics,
 }: TodayViewProps) {
   const isRunning = status === 'running';
-  const isBusy = status === 'requesting-camera' || status === 'loading-models';
+  const isBusy =
+    status === 'requesting-camera' ||
+    status === 'loading-models' ||
+    status === 'choosing-camera';
   const pipActive = pipKind !== 'none';
   const name = settings.userName.trim();
 
   const headline = (() => {
     if (status === 'requesting-camera') return 'Opening your front camera locally.';
     if (status === 'loading-models') return 'Preparing on-device awareness.';
+    if (status === 'choosing-camera') return 'Finding the camera in front of your face.';
     if (status === 'running') {
       if (frameGeometry?.handInZone) {
         return name
@@ -114,13 +125,18 @@ export function TodayView({
     if (status === 'loading-models') {
       return 'Loading bundled MediaPipe face and hand models from local cache.';
     }
+    if (status === 'choosing-camera') {
+      return 'Quickly checking your connected cameras to pick the straight-on view.';
+    }
     if (status === 'running') {
       if (pipActive) {
         return 'Floating in a mini-window at 4 FPS. Switch to another tab or app freely.';
       }
       return diagnostics.faceState === 'cached'
         ? 'Occlusion cache holding your watched zone steady.'
-        : 'Watching gently at 4 FPS on-device. Keep reading or working as usual.';
+        : diagnostics.cameraLabel
+          ? `Watching gently at 4 FPS on-device via ${diagnostics.cameraLabel}.`
+          : 'Watching gently at 4 FPS on-device. Keep reading or working as usual.';
     }
     return '100% on-device eyebrow awareness. Zero cloud calls, zero video saved.';
   })();
@@ -213,7 +229,9 @@ export function TodayView({
                 ? 'Requesting camera…'
                 : status === 'loading-models'
                   ? 'Loading local models…'
-                  : 'Begin session'}
+                  : status === 'choosing-camera'
+                    ? 'Choosing front camera…'
+                    : 'Begin session'}
             </button>
           ) : (
             <button
@@ -251,11 +269,21 @@ export function TodayView({
         {/* Clear, friendly 1-line explanation of Floating Mini-Window (PiP) */}
         {pipSupported && (
           <p className="pip-helper-line">
-            <strong>Mini-window (Picture-in-Picture)</strong> floats a tiny Still card in the
-            corner while you read or browse other tabs
-            {autoPipSupported && settings.autoPipOnTabSwitch
-              ? ' — and pops out automatically when you switch tabs.'
-              : '.'}
+            {autoPipPermission === 'denied' ? (
+              <>
+                <strong>Auto-float is blocked in browser settings</strong> — click the site controls
+                icon left of the address bar to allow Automatic picture-in-picture, or click{' '}
+                <strong>Float mini-window</strong> above.
+              </>
+            ) : (
+              <>
+                <strong>Mini-window (Picture-in-Picture)</strong> pops out automatically when you
+                switch browser tabs
+                {autoPipSupported && settings.autoPipOnTabSwitch
+                  ? ' — click Float mini-window once to keep it floating over other Mac apps too.'
+                  : '. Click Float mini-window to keep it floating over other apps.'}
+              </>
+            )}
           </p>
         )}
 
@@ -344,7 +372,9 @@ export function TodayView({
         expanded={calibrationOpen}
         onToggleExpand={onToggleCalibration}
         settings={settings}
+        availableCameras={availableCameras}
         onUpdateSettings={onUpdateSettings}
+        onSelectCamera={onSelectCamera}
         videoRef={videoRef}
         frameGeometry={frameGeometry}
         dwellSec={dwellSec}

@@ -150,6 +150,16 @@ export function App() {
   const todayKey = getLocalDateKey();
   const today = days[todayKey] ?? getEmptyDay(todayKey);
 
+  const handleSelectCamera = useCallback(
+    (deviceId: string) => {
+      updateSettings({ selectedCameraId: deviceId });
+      if (session.status === 'running') {
+        void session.switchCamera(deviceId);
+      }
+    },
+    [session, updateSettings]
+  );
+
   const pip = usePictureInPicture(
     {
       theme,
@@ -633,7 +643,9 @@ export function App() {
             today={today}
             totalCalmSeconds={totalCalmSeconds}
             settings={settings}
+            availableCameras={session.availableCameras}
             onUpdateSettings={updateSettings}
+            onSelectCamera={handleSelectCamera}
             onStart={() => {
               pip.primeCanvasVideo();
               void session.startSession();
@@ -647,6 +659,7 @@ export function App() {
             onOpenSettings={() => setActiveTab('settings')}
             pipSupported={pip.isSupported}
             autoPipSupported={pip.autoPipSupported}
+            autoPipPermission={pip.autoPipPermission}
             pipKind={pip.pipKind}
             pipError={pip.pipError}
             onTogglePiP={() => {
@@ -707,7 +720,10 @@ export function App() {
             settings={settings}
             theme={theme}
             autoPipSupported={pip.autoPipSupported}
+            autoPipPermission={pip.autoPipPermission}
+            availableCameras={session.availableCameras}
             onUpdateSettings={updateSettings}
+            onSelectCamera={handleSelectCamera}
             onToggleTheme={() => setTheme((t) => (t === 'light' ? 'dark' : 'light'))}
             onTestStage1={session.triggerTestCue}
             onTestStage2={() => {
