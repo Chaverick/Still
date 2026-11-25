@@ -297,13 +297,15 @@ export function CalibrationDrawer({
                     ? 'Ignoring ear touch'
                     : frameGeometry?.filteredReason === 'drinking'
                       ? 'Ignoring drink / glass'
-                      : frameGeometry?.filteredReason === 'foreground'
-                        ? 'Hand in foreground (ignored)'
-                        : diagnostics.faceState === 'detected'
-                          ? `${diagnostics.sideAngle ? 'Side angle · boosted' : 'Face locked'} · ${diagnostics.handsCount} ${diagnostics.handsCount === 1 ? 'hand' : 'hands'}`
-                          : diagnostics.faceState === 'cached'
-                            ? 'Occlusion cache active (up to 5s)'
-                            : 'Face out of frame'}
+                      : frameGeometry?.filteredReason === 'below-brow'
+                        ? 'Ignoring below-brow overlap'
+                        : frameGeometry?.filteredReason === 'foreground'
+                          ? 'Hand in foreground (ignored)'
+                          : diagnostics.faceState === 'detected'
+                            ? `${diagnostics.topDownAngle ? 'Top-down · tuned' : diagnostics.sideAngle ? 'Side angle · boosted' : 'Face locked'} · ${diagnostics.handsCount} ${diagnostics.handsCount === 1 ? 'hand' : 'hands'}`
+                            : diagnostics.faceState === 'cached'
+                              ? 'Occlusion cache active (up to 5s)'
+                              : 'Face out of frame'}
             </span>
           </div>
 
@@ -488,10 +490,13 @@ export function CalibrationDrawer({
           {/* High-Recall Ear-Touch & Drinking Precision Guard */}
           <div className="pinch-filter-row">
             <div className="toggle-copy">
-              <span className="slider-label">Ignore ear touches &amp; drinking (recommended)</span>
+              <span className="slider-label">
+                Ignore ear touches, drinking &amp; top-down overlaps (recommended)
+              </span>
               <span className="toggle-desc">
-                Uses hand-to-face depth scale, ear boundaries, and sipping mouth cues to filter
-                out glasses and ear touches while keeping full eyebrow recall.
+                Uses hand-to-face depth scale, ear &amp; eye-line boundaries, sipping cues, and
+                top-down camera angle compensation to cut false alarms while keeping full eyebrow
+                recall.
               </span>
             </div>
             <button
